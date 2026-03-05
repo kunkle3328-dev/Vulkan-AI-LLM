@@ -46,6 +46,17 @@ const INITIAL_MODELS: Model[] = [
     recommendation: 'Best for Galaxy S25 and modern Android phones. Fast and capable.'
   },
   {
+    id: 'llama-3-8b',
+    name: 'Llama 3 8B',
+    runtime: 'GGUF',
+    size: '4.7 GB',
+    sizeBytes: 5046586572,
+    tags: ['POWERFUL', 'GENERAL'],
+    status: 'NOT_INSTALLED',
+    description: 'The latest generation of Meta\'s Llama models. Offers industry-leading performance for its parameter class.',
+    recommendation: 'Recommended for high-end PCs with dedicated GPUs. Best for creative writing and complex reasoning.'
+  },
+  {
     id: 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC',
     name: 'Mistral 7B v0.3',
     runtime: 'WEBLLM',
@@ -66,6 +77,17 @@ const INITIAL_MODELS: Model[] = [
     status: 'NOT_INSTALLED',
     description: 'Microsoft\'s highly capable small language model. Excels at reasoning, logic, and math tasks despite its size.',
     recommendation: 'Recommended for mid-range devices. Best for logical reasoning and structured data tasks.'
+  },
+  {
+    id: 'gemma-2b-it',
+    name: 'Gemma 2B IT',
+    runtime: 'GGUF',
+    size: '1.4 GB',
+    sizeBytes: 1503238553,
+    tags: ['LIGHTWEIGHT', 'GOOGLE'],
+    status: 'NOT_INSTALLED',
+    description: 'Google\'s lightweight Gemma model. Fast and efficient for simple tasks and chat.',
+    recommendation: 'Best for entry-level devices. Very fast response times.'
   }
 ];
 

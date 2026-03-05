@@ -64,6 +64,19 @@ export class ModelDownloader {
     let downloadedBytes = shards.reduce((acc, shard) => acc + shard.data.byteLength, 0);
     let lastShardIndex = shards.reduce((max, shard) => Math.max(max, shard.shardIndex), -1);
 
+    // If we already have metadata and we've reached totalBytes, we're done
+    if (meta && meta.completed && downloadedBytes >= meta.totalBytes) {
+      console.log(`[Downloader] ${modelId} already downloaded and completed.`);
+      onProgress({
+        progress: 100,
+        speed: 'Ready',
+        eta: 'Done',
+        receivedBytes: downloadedBytes,
+        totalBytes: meta.totalBytes
+      });
+      return;
+    }
+
     console.log(`[Downloader] Resuming ${modelId} from ${downloadedBytes} bytes (Last Shard: ${lastShardIndex})`);
 
     const headers: HeadersInit = {};
@@ -79,6 +92,23 @@ export class ModelDownloader {
       throw new Error(`Network error: Could not connect to the server. Please check your internet connection. (${fetchErr.message})`);
     }
     
+    // Handle 416 Range Not Satisfiable - often means we already have the full file
+    if (response.status === 416) {
+      console.log(`[Downloader] Server returned 416 for ${modelId}. Assuming download is complete.`);
+      if (meta) {
+        meta.completed = true;
+        await db.put(STORE_META, meta);
+      }
+      onProgress({
+        progress: 100,
+        speed: 'Ready',
+        eta: 'Done',
+        receivedBytes: downloadedBytes,
+        totalBytes: meta?.totalBytes || downloadedBytes
+      });
+      return;
+    }
+
     if (!response.ok && response.status !== 206) {
       const errorText = await response.text().catch(() => 'No error details');
       throw new Error(`Failed to fetch model: ${response.status} ${response.statusText} - ${errorText}`);

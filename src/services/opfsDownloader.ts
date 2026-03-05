@@ -72,6 +72,12 @@ export async function downloadToOPFS({
   expectedSha256 = null,
   onProgress = () => {},
 }: DownloadArgs): Promise<{ path: string[]; bytes: number }> {
+  // Check for createWritable support - required for this downloader
+  // @ts-ignore
+  if (typeof FileSystemFileHandle !== 'undefined' && !FileSystemFileHandle.prototype.createWritable) {
+    console.warn("[Downloader] createWritable not supported. This may fail on some browsers.");
+  }
+
   const root = await getOPFSRoot();
   const dir = await ensureDir(root, opfsDir);
 
