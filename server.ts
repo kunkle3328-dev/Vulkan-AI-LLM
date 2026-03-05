@@ -43,7 +43,9 @@ async function startServer() {
     'Llama-3.2-3B-Instruct-q4f16_1-MLC': 1932735283,
     'Mistral-7B-Instruct-v0.3-q4f16_1-MLC': 4402341478,
     'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 5046586572,
-    'Gemma-2b-it-q4f16_1-MLC': 1503238553
+    'Gemma-2b-it-q4f16_1-MLC': 1503238553,
+    'gemma-2b-it-q4f16_1-MLC': 1503238553,
+    'Phi-3-mini-4k-instruct-q4f16_1-MLC': 2297503744
   };
 
   apiRouter.get("/download/model/:id", async (req, res) => {

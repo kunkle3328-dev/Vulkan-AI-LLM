@@ -28,6 +28,15 @@ import { modelDownloader } from './services/modelDownloader';
 import { boot } from './services/webllmBoot';
 import { getEngine, streamWebLLMChat, getCurrentModelId } from './services/webllmService';
 import { isModelInOPFS, deleteModelFromOPFS } from './services/opfsDownloader';
+import { 
+  getStorageStats, 
+  clearAllOPFS, 
+  clearAllIndexedDB, 
+  clearAllCaches,
+  getModelStorageUsage, 
+  isModelInCache,
+  StorageStats 
+} from './services/storageService';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -39,16 +48,16 @@ const INITIAL_MODELS: Model[] = [
     name: 'Llama 3.2 3B',
     runtime: 'WEBLLM',
     size: '1.8 GB',
-    sizeBytes: 1.8 * 1024 * 1024 * 1024,
+    sizeBytes: 1932735283,
     tags: ['FAST', 'MOBILE OPTIMIZED'],
     status: 'NOT_INSTALLED',
     description: 'Meta\'s Llama 3.2 3B Instruct model. Optimized for mobile devices with high quality and speed.',
     recommendation: 'Best for Galaxy S25 and modern Android phones. Fast and capable.'
   },
   {
-    id: 'llama-3-8b',
+    id: 'Llama-3-8B-Instruct-q4f16_1-MLC',
     name: 'Llama 3 8B',
-    runtime: 'GGUF',
+    runtime: 'WEBLLM',
     size: '4.7 GB',
     sizeBytes: 5046586572,
     tags: ['POWERFUL', 'GENERAL'],
@@ -61,27 +70,27 @@ const INITIAL_MODELS: Model[] = [
     name: 'Mistral 7B v0.3',
     runtime: 'WEBLLM',
     size: '4.1 GB',
-    sizeBytes: 4.1 * 1024 * 1024 * 1024,
+    sizeBytes: 4402341478,
     tags: ['BALANCED', 'CODING'],
     status: 'NOT_INSTALLED',
     description: 'A highly efficient and versatile model from Mistral AI. Known for its strong performance in coding and English tasks.',
     recommendation: 'Recommended for devices with at least 8GB RAM. Best for coding assistance and general purpose chat.'
   },
   {
-    id: 'phi-3-mini',
+    id: 'Phi-3-mini-4k-instruct-q4f16_1-MLC',
     name: 'Phi-3 Mini (3.8B)',
-    runtime: 'GGUF',
+    runtime: 'WEBLLM',
     size: '2.14 GB',
-    sizeBytes: 2.14 * 1024 * 1024 * 1024,
+    sizeBytes: 2297503744,
     tags: ['CHAT', 'REASONING'],
     status: 'NOT_INSTALLED',
     description: 'Microsoft\'s highly capable small language model. Excels at reasoning, logic, and math tasks despite its size.',
     recommendation: 'Recommended for mid-range devices. Best for logical reasoning and structured data tasks.'
   },
   {
-    id: 'gemma-2b-it',
+    id: 'gemma-2b-it-q4f16_1-MLC',
     name: 'Gemma 2B IT',
-    runtime: 'GGUF',
+    runtime: 'WEBLLM',
     size: '1.4 GB',
     sizeBytes: 1503238553,
     tags: ['LIGHTWEIGHT', 'GOOGLE'],
@@ -103,7 +112,23 @@ export default function App() {
   const [models, setModels] = useState<Model[]>(() => {
     const saved = localStorage.getItem('vulkan_models');
     if (saved) {
-      const parsed: Model[] = JSON.parse(saved);
+      let parsed: Model[] = JSON.parse(saved);
+      
+      // ID Migration Map
+      const idMigration: Record<string, string> = {
+        'mistral-7b-v0.3': 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC',
+        'gemma-2b-it': 'gemma-2b-it-q4f16_1-MLC',
+        'phi-3-mini': 'Phi-3-mini-4k-instruct-q4f16_1-MLC',
+        'llama-3-8b': 'Llama-3-8B-Instruct-q4f16_1-MLC',
+        'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f16_1-MLC'
+      };
+
+      // Apply migration
+      parsed = parsed.map(m => ({
+        ...m,
+        id: idMigration[m.id] || m.id
+      }));
+
       // Sync names and metadata from INITIAL_MODELS to fix identity bugs
       return parsed.map(m => {
         const initial = INITIAL_MODELS.find(im => im.id === m.id);
@@ -113,6 +138,7 @@ export default function App() {
           return { 
             ...m, 
             status,
+            runtime: initial.runtime, // Ensure runtime is updated
             name: initial.name, 
             tags: initial.tags, 
             size: initial.size, 
@@ -134,13 +160,39 @@ export default function App() {
   
   const [threads, setThreads] = useState<ChatThread[]>(() => {
     const saved = localStorage.getItem('vulkan_threads');
-    return saved ? JSON.parse(saved) : [];
+    let parsed: ChatThread[] = saved ? JSON.parse(saved) : [];
+    
+    // ID Migration Map
+    const idMigration: Record<string, string> = {
+      'mistral-7b-v0.3': 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC',
+      'gemma-2b-it': 'gemma-2b-it-q4f16_1-MLC',
+      'phi-3-mini': 'Phi-3-mini-4k-instruct-q4f16_1-MLC',
+      'llama-3-8b': 'Llama-3-8B-Instruct-q4f16_1-MLC',
+      'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f16_1-MLC'
+    };
+
+    // Apply migration to threads
+    return parsed.map(t => ({
+      ...t,
+      modelId: idMigration[t.modelId] || t.modelId
+    }));
   });
   
   const [activeThreadId, setActiveThreadId] = useState<string | null>(() => {
     const saved = localStorage.getItem('vulkan_active_thread');
     return saved || null;
   });
+
+  // Ensure activeThreadId is always valid
+  useEffect(() => {
+    if (threads.length > 0) {
+      if (!activeThreadId || !threads.find(t => t.id === activeThreadId)) {
+        setActiveThreadId(threads[0].id);
+      }
+    } else {
+      setActiveThreadId(null);
+    }
+  }, [threads, activeThreadId]);
 
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -181,7 +233,7 @@ export default function App() {
     const newThread: ChatThread = {
       id: Date.now().toString(),
       title: 'New Conversation',
-      modelId: 'gemma-2b-it',
+      modelId: 'Llama-3.2-3B-Instruct-q4f16_1-MLC',
       messages: [],
       createdAt: new Date().toISOString()
     };
@@ -200,7 +252,12 @@ export default function App() {
   };
 
   const handleSendMessage = async () => {
-    if (!input.trim() || isTyping || !activeThreadId || !activeModel) return;
+    if (!input.trim() || isTyping || !activeThreadId) return;
+
+    if (!activeModel) {
+      setAppError("Model not found for this thread. Please select a model from the header.");
+      return;
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -303,25 +360,28 @@ export default function App() {
 
   useEffect(() => {
     const syncWithDB = async () => {
+      const storageUsage = await getModelStorageUsage();
       const updatedModels = await Promise.all(models.map(async (m) => {
         let isDownloaded = false;
+        let actualSizeBytes = 0;
+        
         if (m.runtime === 'WEBLLM') {
-          isDownloaded = await isModelInOPFS(m.id);
+          // Check both OPFS (old) and Cache API (new)
+          const inOPFS = await isModelInOPFS(m.id);
+          const inCache = await isModelInCache(m.id);
+          isDownloaded = inOPFS || inCache;
+          actualSizeBytes = storageUsage.find(s => s.id === m.id)?.size || 0;
         } else {
           isDownloaded = await modelDownloader.isModelDownloaded(m.id);
         }
         
-        if (isDownloaded && m.status !== 'READY') {
-          return { ...m, status: 'READY' as ModelStatus };
-        }
-        return m;
+        // Don't overwrite DOWNLOADING status during sync
+        const status: ModelStatus = isDownloaded ? 'READY' : (m.status === 'READY' ? 'NOT_INSTALLED' : m.status);
+        
+        return { ...m, status, actualSizeBytes };
       }));
       
-      // Check if any status changed
-      const changed = updatedModels.some((m, i) => m.status !== models[i].status);
-      if (changed) {
-        setModels(updatedModels);
-      }
+      setModels(updatedModels);
     };
     syncWithDB();
   }, []);
@@ -329,6 +389,19 @@ export default function App() {
   const startRealDownload = async (id: string) => {
     const model = models.find(m => m.id === id);
     if (!model) return;
+
+    // Check storage space first
+    const stats = await getStorageStats();
+    if (stats) {
+      const availableGB = stats.quotaGB - stats.usageGB;
+      const modelSizeGB = model.sizeBytes / (1024 ** 3);
+      
+      // Require at least model size + 1GB buffer
+      if (availableGB < modelSizeGB + 1) {
+        alert(`Insufficient storage space. You have ${availableGB.toFixed(1)} GB available, but this model requires approximately ${modelSizeGB.toFixed(1)} GB plus overhead. Please clear some space in Settings.`);
+        return;
+      }
+    }
 
     setModels(prev => prev.map(m => m.id === id ? { ...m, status: 'DOWNLOADING', progress: 0 } : m));
 
@@ -377,40 +450,39 @@ export default function App() {
     }
   };
 
-  const [storageInfo, setStorageInfo] = useState<{ usage: string, quota: string } | null>(null);
+  const [storageInfo, setStorageInfo] = useState<StorageStats | null>(null);
 
   useEffect(() => {
     const checkStorage = async () => {
-      if (navigator.storage && navigator.storage.estimate) {
-        const estimate = await navigator.storage.estimate();
-        setStorageInfo({
-          usage: (estimate.usage ? (estimate.usage / (1024 * 1024 * 1024)).toFixed(2) : '0') + ' GB',
-          quota: (estimate.quota ? (estimate.quota / (1024 * 1024 * 1024)).toFixed(2) : '0') + ' GB'
-        });
-      }
+      const stats = await getStorageStats();
+      setStorageInfo(stats);
     };
     checkStorage();
+    // Refresh storage info every 30 seconds
+    const interval = setInterval(checkStorage, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const clearModelCache = async () => {
     if (confirm('This will delete ALL downloaded model weights from your device. Continue?')) {
-      // Clear IndexedDB
-      const dbNames = await window.indexedDB.databases();
-      for (const db of dbNames) {
-        if (db.name) window.indexedDB.deleteDatabase(db.name);
-      }
-      
-      // Clear OPFS
-      for (const m of models) {
-        if (m.runtime === 'WEBLLM') {
-          await deleteModelFromOPFS(m.id);
-        }
-      }
+      try {
+        // Clear OPFS
+        await clearAllOPFS();
+        
+        // Clear IndexedDB
+        await clearAllIndexedDB();
 
-      setModels(INITIAL_MODELS);
-      localStorage.removeItem('vulkan_models');
-      alert('Cache cleared. Please refresh the page.');
-      window.location.reload();
+        // Clear Cache API
+        await clearAllCaches();
+
+        setModels(INITIAL_MODELS);
+        localStorage.removeItem('vulkan_models');
+        alert('Cache cleared successfully. The page will now reload.');
+        window.location.reload();
+      } catch (err: any) {
+        console.error("Failed to clear cache:", err);
+        alert(`Failed to clear cache: ${err.message}`);
+      }
     }
   };
 
@@ -745,7 +817,7 @@ export default function App() {
                       <Database className="w-5 h-5 text-blue-500" />
                     </div>
                     <div>
-                      <div className="text-sm font-bold">12.4 GB</div>
+                      <div className="text-sm font-bold">{storageInfo ? (storageInfo.quotaGB - storageInfo.usageGB).toFixed(2) : '0.00'} GB</div>
                       <div className="text-[10px] text-white/40 uppercase tracking-wider font-bold">Available</div>
                     </div>
                   </div>
@@ -777,7 +849,11 @@ export default function App() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="px-2 py-0.5 bg-white/5 rounded text-[10px] font-bold text-white/40 uppercase">{model.runtime}</span>
-                    <span className="text-xs text-white/40">{model.size}</span>
+                    <span className="text-xs text-white/40">
+                      {model.status === 'READY' && model.actualSizeBytes 
+                        ? `${(model.actualSizeBytes / (1024 ** 3)).toFixed(2)} GB on disk` 
+                        : (model.status === 'READY' ? 'Ready' : model.size)}
+                    </span>
                     <div className="flex flex-wrap gap-1.5">
                       {model.tags.map(tag => (
                         <span key={tag} className="text-[10px] text-white/20 uppercase font-bold tracking-tight">{tag}</span>
@@ -787,7 +863,12 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center justify-end gap-2">
-                  {model.status === 'READY' ? (
+                  {model.runtime === 'GGUF' ? (
+                    <div className="flex flex-col items-end">
+                      <div className="text-[10px] text-red-500 font-bold uppercase tracking-widest mb-1">Unsupported</div>
+                      <div className="text-[9px] text-white/30 max-w-[150px] text-right">GGUF runtime not implemented; model cannot be loaded for chat.</div>
+                    </div>
+                  ) : model.status === 'READY' ? (
                     <div className="flex items-center gap-2">
                       <div className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest mr-2">Installed</div>
                       <button 
@@ -850,7 +931,7 @@ export default function App() {
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-[10px] text-white/40 font-bold uppercase tracking-wider">Downloading model weights...</span>
-                    <span className="text-xs font-bold text-blue-500">{model.progress}%</span>
+                    <span className="text-xs font-bold text-blue-500">{model.progress?.toFixed(1)}%</span>
                   </div>
                 </div>
               )}
@@ -933,19 +1014,19 @@ export default function App() {
                             <div className="text-xs text-white/40">Large models require at least 6-10 GB of free space.</div>
                           </div>
                           <div className="text-right">
-                            <div className="text-sm font-bold text-emerald-500">{storageInfo?.quota || 'Checking...'}</div>
-                            <div className="text-[10px] text-white/30 uppercase font-bold">Total Available</div>
+                            <div className="text-sm font-bold text-emerald-500">{storageInfo?.quotaGB.toFixed(1) || '0'} GB</div>
+                            <div className="text-[10px] text-white/30 uppercase font-bold">Total Quota</div>
                           </div>
                         </div>
                         <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden mb-3">
                           <div 
                             className="h-full bg-emerald-500 transition-all duration-500" 
-                            style={{ width: storageInfo ? `${(parseFloat(storageInfo.usage) / parseFloat(storageInfo.quota) * 100)}%` : '0%' }} 
+                            style={{ width: storageInfo ? `${storageInfo.percent}%` : '0%' }} 
                           />
                         </div>
                         <div className="flex justify-between text-[10px] text-white/30 font-bold uppercase tracking-wider">
-                          <span>Used: {storageInfo?.usage || '0 GB'}</span>
-                          <span>Free: {storageInfo ? (parseFloat(storageInfo.quota) - parseFloat(storageInfo.usage)).toFixed(2) : '0'} GB</span>
+                          <span>Used: {storageInfo?.usageGB.toFixed(1) || '0'} GB</span>
+                          <span>Free: {storageInfo ? (storageInfo.quotaGB - storageInfo.usageGB).toFixed(1) : '0'} GB</span>
                         </div>
                       </div>
 

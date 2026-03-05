@@ -77,22 +77,79 @@ export class ModelDownloader {
       return;
     }
 
-    console.log(`[Downloader] Resuming ${modelId} from ${downloadedBytes} bytes (Last Shard: ${lastShardIndex})`);
+    const fetchWithRetry = async (currentOffset: number, maxAttempts = 5): Promise<Response> => {
+      let attempt = 0;
+      
+      while (attempt < maxAttempts) {
+        attempt++;
+        const headers: HeadersInit = {};
+        if (currentOffset > 0) {
+          headers['Range'] = `bytes=${currentOffset}-`;
+        }
 
-    const headers: HeadersInit = {};
-    if (downloadedBytes > 0) {
-      headers['Range'] = `bytes=${downloadedBytes}-`;
-    }
+        try {
+          const response = await fetch(url, { headers });
+          
+          if (response.ok || response.status === 206 || response.status === 416) {
+            return response;
+          }
 
-    let response: Response;
-    try {
-      response = await fetch(url, { headers });
-    } catch (fetchErr: any) {
-      console.error(`[Downloader] Fetch failed for ${modelId}:`, fetchErr);
-      throw new Error(`Network error: Could not connect to the server. Please check your internet connection. (${fetchErr.message})`);
-    }
+          // Transient errors that we should retry
+          const retryableStatuses = [429, 500, 502, 503, 504];
+          if (retryableStatuses.includes(response.status) && attempt < maxAttempts) {
+            const retryAfter = response.headers.get('Retry-After');
+            let delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000; // Exponential backoff + jitter
+            
+            if (retryAfter) {
+              const seconds = parseInt(retryAfter, 10);
+              if (!isNaN(seconds)) {
+                delay = seconds * 1000;
+              } else {
+                const date = Date.parse(retryAfter);
+                if (!isNaN(date)) {
+                  delay = Math.max(0, date - Date.now());
+                }
+              }
+            }
+
+            console.warn(`[Downloader] Attempt ${attempt} failed with ${response.status}. Retrying in ${Math.round(delay)}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+
+          // Non-retryable error or max attempts reached
+          const bodySnippet = await response.text().catch(() => '').then(t => t.slice(0, 4096));
+          const requestId = response.headers.get('x-request-id') || response.headers.get('cf-ray') || 'N/A';
+          const statusText = response.statusText || this.getStatusTextFallback(response.status);
+          const redactedUrl = url.replace(/([?&])(key|token|auth)=[^&]+/g, '$1$2=***');
+
+          const errorMsg = `Failed to fetch model: ${response.status} ${statusText}
+URL: ${redactedUrl}
+Request ID: ${requestId}
+Body: ${bodySnippet || '(empty)'}`;
+          
+          throw new Error(errorMsg);
+
+        } catch (err: any) {
+          if (err.message.includes('Failed to fetch model:')) throw err; // Already formatted
+
+          if (attempt < maxAttempts) {
+            const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+            console.warn(`[Downloader] Attempt ${attempt} network error: ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          throw new Error(`Network error after ${maxAttempts} attempts: ${err.message}`);
+        }
+      }
+      throw new Error(`Failed to download after ${maxAttempts} attempts`);
+    };
+
+    console.log(`[Downloader] Starting/Resuming ${modelId} from ${downloadedBytes} bytes`);
+
+    let response = await fetchWithRetry(downloadedBytes);
     
-    // Handle 416 Range Not Satisfiable - often means we already have the full file
+    // Handle 416 Range Not Satisfiable
     if (response.status === 416) {
       console.log(`[Downloader] Server returned 416 for ${modelId}. Assuming download is complete.`);
       if (meta) {
@@ -109,9 +166,13 @@ export class ModelDownloader {
       return;
     }
 
-    if (!response.ok && response.status !== 206) {
-      const errorText = await response.text().catch(() => 'No error details');
-      throw new Error(`Failed to fetch model: ${response.status} ${response.statusText} - ${errorText}`);
+    // Fix resume corruption: If we requested a range but got 200, restart from 0
+    if (downloadedBytes > 0 && response.status === 200) {
+      console.warn(`[Downloader] Server ignored Range request for ${modelId}. Restarting from 0 to avoid corruption.`);
+      await this.deleteModel(modelId);
+      downloadedBytes = 0;
+      lastShardIndex = -1;
+      // We already have the response for 0-, so we can just continue with it
     }
 
     const contentLength = Number(response.headers.get('Content-Length')) || 0;
@@ -126,9 +187,9 @@ export class ModelDownloader {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('ReadableStream not supported');
 
-    let receivedBytes = downloadedBytes;
+    let receivedBytes = response.status === 206 ? downloadedBytes : 0;
     let startTime = Date.now();
-    let shardIndex = lastShardIndex + 1;
+    let shardIndex = response.status === 206 ? lastShardIndex + 1 : 0;
     let currentShardData: Uint8Array[] = [];
     let currentShardSize = 0;
     const SHARD_SIZE = 10 * 1024 * 1024; // 10MB shards
@@ -152,7 +213,7 @@ export class ModelDownloader {
         // Progress reporting
         const now = Date.now();
         const elapsed = (now - startTime) / 1000;
-        const speed = (receivedBytes - downloadedBytes) / (elapsed || 0.1);
+        const speed = (receivedBytes - (response.status === 206 ? downloadedBytes : 0)) / (elapsed || 0.1);
         const progress = totalBytes > 0 ? (receivedBytes / totalBytes) * 100 : 0;
 
         onProgress({
@@ -194,6 +255,21 @@ export class ModelDownloader {
     await db.put(STORE_META, meta);
     
     console.log(`[Downloader] Download complete and verified for ${modelId}`);
+  }
+
+  private getStatusTextFallback(status: number): string {
+    const fallbacks: Record<number, string> = {
+      400: 'Bad Request',
+      401: 'Unauthorized',
+      403: 'Forbidden',
+      404: 'Not Found',
+      429: 'Too Many Requests',
+      500: 'Internal Server Error',
+      502: 'Bad Gateway',
+      503: 'Service Unavailable',
+      504: 'Gateway Timeout'
+    };
+    return fallbacks[status] || 'Unknown Error';
   }
 
   private async verifyIntegrity(modelId: string): Promise<boolean> {

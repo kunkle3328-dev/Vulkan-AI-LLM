@@ -13,6 +13,7 @@ export interface Model {
   eta?: string;
   description?: string;
   recommendation?: string;
+  actualSizeBytes?: number;
 }
 
 export interface Settings {

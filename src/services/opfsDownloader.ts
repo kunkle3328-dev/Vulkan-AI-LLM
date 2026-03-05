@@ -62,6 +62,22 @@ interface DownloadArgs {
   onProgress?: (info: ProgressInfo) => void;
 }
 
+function getStatusTextFallback(status: number): string {
+  const fallbacks: Record<number, string> = {
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    416: 'Range Not Satisfiable',
+    429: 'Too Many Requests',
+    500: 'Internal Server Error',
+    502: 'Bad Gateway',
+    503: 'Service Unavailable',
+    504: 'Gateway Timeout'
+  };
+  return fallbacks[status] || 'Unknown Error';
+}
+
 /**
  * Download a single large artifact to OPFS.
  */
@@ -123,27 +139,82 @@ export async function downloadToOPFS({
 
     let resp: Response;
     try {
-      resp = await fetch(url, { headers, cache: "no-store" });
+      const fetchWithRetry = async (currentOffset: number, maxAttempts = 6): Promise<Response> => {
+        let attempt = 0;
+        while (attempt < maxAttempts) {
+          attempt++;
+          const headers = new Headers();
+          if (currentOffset > 0) headers.set("Range", `bytes=${currentOffset}-`);
+
+          try {
+            const response = await fetch(url, { headers, cache: "no-store" });
+            
+            if (response.ok || response.status === 206) {
+              return response;
+            }
+
+            // Transient errors that we should retry
+            const retryableStatuses = [429, 500, 502, 503, 504];
+            if (retryableStatuses.includes(response.status) && attempt < maxAttempts) {
+              const retryAfter = response.headers.get('Retry-After');
+              let delay = Math.pow(2, attempt) * 500 + Math.random() * 500; // Exponential backoff + jitter
+              
+              if (retryAfter) {
+                const seconds = parseInt(retryAfter, 10);
+                if (!isNaN(seconds)) {
+                  delay = seconds * 1000;
+                } else {
+                  const date = Date.parse(retryAfter);
+                  if (!isNaN(date)) {
+                    delay = Math.max(0, date - Date.now());
+                  }
+                }
+              }
+
+              onProgress({ phase: "retry", received: currentOffset, total: null, pct: null, text: `HTTP ${response.status}. Retrying in ${Math.round(delay / 1000)}s…` });
+              await sleep(delay);
+              continue;
+            }
+
+            // Non-retryable error or max attempts reached
+            const bodySnippet = await response.text().catch(() => '').then(t => t.slice(0, 4096));
+            const requestId = response.headers.get('x-request-id') || response.headers.get('cf-ray') || 'N/A';
+            const statusText = response.statusText || getStatusTextFallback(response.status);
+            const redactedUrl = url.replace(/([?&])(key|token|auth)=[^&]+/g, '$1$2=***');
+
+            const errorMsg = `Failed to fetch artifact: ${response.status} ${statusText}
+URL: ${redactedUrl}
+Request ID: ${requestId}
+Body: ${bodySnippet || '(empty)'}`;
+            
+            throw new Error(errorMsg);
+
+          } catch (err: any) {
+            if (err.message.includes('Failed to fetch artifact:')) throw err;
+
+            if (attempt < maxAttempts) {
+              const delay = Math.pow(2, attempt) * 500 + Math.random() * 500;
+              onProgress({ phase: "retry", received: currentOffset, total: null, pct: null, text: `Network error. Retrying in ${Math.round(delay / 1000)}s…` });
+              await sleep(delay);
+              continue;
+            }
+            throw new Error(`Network error after ${maxAttempts} attempts: ${err.message}`);
+          }
+        }
+        throw new Error(`Failed to download after ${maxAttempts} attempts`);
+      };
+
+      resp = await fetchWithRetry(resumeFrom);
     } catch (e: any) {
-      const backoff = Math.min(15000, 500 * 2 ** (attempt - 1));
-      onProgress({ phase: "retry", received: resumeFrom, total: null, pct: null, text: `Network error. Retrying in ${Math.round(backoff / 1000)}s…` });
-      await sleep(backoff);
-      continue;
+      throw e;
     }
 
     // If Range requested but not supported, restart from 0.
     if (resumeFrom > 0 && resp.status === 200) {
-      // Server ignored Range; start over
+      console.warn(`[Downloader] Server ignored Range for ${filename}. Restarting from 0.`);
       await removeFileIfExists(dir, partName);
       await dir.getFileHandle(partName, { create: true });
       resumeFrom = 0;
-    }
-
-    if (!(resp.ok || resp.status === 206)) {
-      const backoff = Math.min(15000, 500 * 2 ** (attempt - 1));
-      onProgress({ phase: "retry", received: resumeFrom, total: null, pct: null, text: `HTTP ${resp.status}. Retrying in ${Math.round(backoff / 1000)}s…` });
-      await sleep(backoff);
-      continue;
     }
 
     const totalFromHeader = (() => {
@@ -180,7 +251,14 @@ export async function downloadToOPFS({
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        await writable.write(value);
+        try {
+          await writable.write(value);
+        } catch (writeErr: any) {
+          if (writeErr.name === 'QuotaExceededError' || writeErr.message.includes('quota')) {
+            throw new Error("Storage quota exceeded. Please free up space by deleting other models or clearing your browser cache.");
+          }
+          throw writeErr;
+        }
         received += value.byteLength;
 
         const pct = totalFromHeader ? Math.min(1, received / totalFromHeader) : null;
@@ -196,6 +274,7 @@ export async function downloadToOPFS({
       }
     } catch (e: any) {
       await writable.close();
+      if (e.message.includes("quota")) throw e;
       const backoff = Math.min(15000, 500 * 2 ** (attempt - 1));
       onProgress({ phase: "retry", received, total: totalFromHeader, pct: null, text: `Stream error. Retrying in ${Math.round(backoff / 1000)}s…` });
       await sleep(backoff);
@@ -267,13 +346,28 @@ export async function isModelInOPFS(modelId: string): Promise<boolean> {
 }
 
 /**
- * Delete a model from OPFS.
+ * Delete a model from OPFS and Cache API.
  */
 export async function deleteModelFromOPFS(modelId: string): Promise<void> {
   try {
+    // 1) Clear OPFS
     const root = await getOPFSRoot();
     const webllmDir = await root.getDirectoryHandle("webllm", { create: false });
     const modelsDir = await webllmDir.getDirectoryHandle("models", { create: false });
     await modelsDir.removeEntry(modelId, { recursive: true });
   } catch (e) {}
+
+  try {
+    // 2) Clear Cache API
+    if ('caches' in window) {
+      const cacheNames = await window.caches.keys();
+      const modelCacheName = cacheNames.find(name => name.includes(modelId));
+      if (modelCacheName) {
+        await window.caches.delete(modelCacheName);
+        console.log(`[Delete] Cache ${modelCacheName} deleted.`);
+      }
+    }
+  } catch (e) {
+    console.error(`[Delete] Failed to clear cache for ${modelId}:`, e);
+  }
 }
