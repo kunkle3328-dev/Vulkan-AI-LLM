@@ -47,7 +47,20 @@ export async function boot({ modelId, onProgress }: BootOptions): Promise<webllm
 
       onProgress("Initializing WebGPU / WebLLM…");
 
-      // 3) Start WebLLM engine with progress callback
+      // 3) Check for shader-f16 support if the model requires it
+      if (modelId.includes("q4f16")) {
+        try {
+          const adapter = await (navigator as any).gpu.requestAdapter();
+          if (adapter && !adapter.features.has("shader-f16")) {
+            throw new Error("This model requires the 'shader-f16' WebGPU extension which is not supported by your browser or hardware. Please try a different model or use a browser that supports this feature (like Chrome or Edge on compatible hardware).");
+          }
+        } catch (e: any) {
+          if (e.message.includes("shader-f16")) throw e;
+          console.warn("[Boot] Could not verify shader-f16 support:", e);
+        }
+      }
+
+      // 4) Start WebLLM engine with progress callback
       // WebLLM handles its own caching in the Cache API.
       console.log(`[Boot] Starting CreateMLCEngine for ${modelId}`);
       const engine = await webllm.CreateMLCEngine(modelId, {

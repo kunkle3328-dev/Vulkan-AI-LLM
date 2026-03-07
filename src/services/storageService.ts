@@ -124,18 +124,53 @@ async function calculateDirSize(dirHandle: FileSystemDirectoryHandle): Promise<n
 export async function isModelInCache(modelId: string): Promise<boolean> {
   if (!('caches' in window)) return false;
   try {
-    // WebLLM uses Cache API with names like "webllm/model_id"
-    // We check if the cache exists and has entries
     const cacheNames = await window.caches.keys();
-    const modelCacheName = cacheNames.find(name => name.includes(modelId));
-    if (modelCacheName) {
-      const cache = await window.caches.open(modelCacheName);
-      const keys = await cache.keys();
-      return keys.length > 0;
-    }
-    return false;
+    return cacheNames.some(name => name.includes(modelId));
   } catch (e) {
     return false;
+  }
+}
+
+export async function getCachedModels(): Promise<Array<{ id: string, size: number }>> {
+  if (!('caches' in window)) return [];
+  
+  const models: Array<{ id: string, size: number }> = [];
+  try {
+    const cacheNames = await window.caches.keys();
+    for (const name of cacheNames) {
+      // WebLLM cache names usually follow patterns like "webllm/model_id"
+      if (name.startsWith('webllm/')) {
+        const modelId = name.replace('webllm/', '');
+        const cache = await window.caches.open(name);
+        const keys = await cache.keys();
+        let totalSize = 0;
+        
+        // We can't easily get the size of all entries without fetching them, 
+        // but we can estimate or just report the count.
+        // Actually, we can iterate and check headers if available, but that's slow.
+        // For now, let's just use a placeholder or try to estimate.
+        // WebLLM stores shards as responses.
+        
+        models.push({ id: modelId, size: keys.length * 32 * 1024 * 1024 }); // Rough estimate: 32MB per shard
+      }
+    }
+  } catch (e) {
+    console.error("Failed to get cached models:", e);
+  }
+  return models;
+}
+
+export async function deleteModelFromCache(modelId: string): Promise<void> {
+  if (!('caches' in window)) return;
+  try {
+    const cacheNames = await window.caches.keys();
+    const target = cacheNames.find(name => name.includes(modelId));
+    if (target) {
+      await window.caches.delete(target);
+      console.log(`Deleted cache for ${modelId}`);
+    }
+  } catch (e) {
+    console.error(`Failed to delete cache for ${modelId}:`, e);
   }
 }
 

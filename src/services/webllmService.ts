@@ -2,10 +2,12 @@ import * as webllm from "@mlc-ai/web-llm";
 
 let engine: webllm.MLCEngineInterface | null = null;
 let currentModelId: string | null = null;
+let lastModelId: string | null = null;
 
 export async function setEngine(newEngine: webllm.MLCEngineInterface, modelId: string) {
   engine = newEngine;
   currentModelId = modelId;
+  lastModelId = modelId;
 }
 
 export function getEngine() {
@@ -14,6 +16,19 @@ export function getEngine() {
 
 export function getCurrentModelId() {
   return currentModelId;
+}
+
+export function getLastModelId() {
+  return lastModelId;
+}
+
+export async function unloadEngine() {
+  if (engine) {
+    console.log(`[WebLLM Service] Unloading engine for ${currentModelId}`);
+    await engine.unload();
+    engine = null;
+    currentModelId = null;
+  }
 }
 
 export async function* streamWebLLMChat(messages: any[]) {

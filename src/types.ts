@@ -1,4 +1,4 @@
-export type ModelStatus = 'READY' | 'DOWNLOADING' | 'NOT_INSTALLED';
+export type ModelStatus = 'READY' | 'DOWNLOADING' | 'NOT_INSTALLED' | 'SUSPENDED';
 
 export interface Model {
   id: string;
@@ -14,12 +14,16 @@ export interface Model {
   description?: string;
   recommendation?: string;
   actualSizeBytes?: number;
+  isCached?: boolean;
 }
 
 export interface Settings {
   performanceMode: 'Balanced' | 'High Performance' | 'Power Saver';
   isolatedInference: boolean;
   vulkanAcceleration: boolean;
+  autoSuspend: boolean;
+  suspendOnHide: boolean;
+  keepAlive: boolean;
 }
 
 export interface Message {
