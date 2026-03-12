@@ -1,90 +1,90 @@
 import * as webllm from "@mlc-ai/web-llm";
 import { setEngine } from "./webllmService";
 import { getStorageStats } from "./storageService";
+import { DeviceReadinessReport } from "../types";
 
 export interface BootOptions {
   modelId: string;
-  onProgress: (text: string, progress?: number) => void;
+  onProgress: (phase: string, progress?: number, message?: string) => void;
 }
 
 const activeBoots = new Map<string, Promise<webllm.MLCEngineInterface>>();
 
+export async function getDeviceReadiness(): Promise<DeviceReadinessReport> {
+  const gpu = (navigator as any).gpu;
+  const webgpuAvailable = !!gpu;
+  let adapterPresent = false;
+  let shaderF16Supported = false;
+
+  if (gpu) {
+    try {
+      const adapter = await gpu.requestAdapter();
+      adapterPresent = !!adapter;
+      if (adapter) {
+        shaderF16Supported = adapter.features.has("shader-f16");
+      }
+    } catch (e) {
+      console.error("Error requesting adapter:", e);
+    }
+  }
+
+  let persistentStorageGranted = false;
+  if (navigator.storage && navigator.storage.persist) {
+    persistentStorageGranted = await navigator.storage.persist();
+  }
+
+  const stats = await getStorageStats();
+  const quotaEstimate = stats ? stats.quotaGB - stats.usageGB : 0;
+
+  return {
+    webgpuAvailable,
+    adapterPresent,
+    shaderF16Supported,
+    persistentStorageGranted,
+    quotaEstimate,
+    recommendedTier: quotaEstimate > 10 ? 'high' : quotaEstimate > 5 ? 'medium' : 'low'
+  };
+}
+
 export async function boot({ modelId, onProgress }: BootOptions): Promise<webllm.MLCEngineInterface> {
-  // Check if already booting this model
   if (activeBoots.has(modelId)) {
-    console.log(`[Boot] Already booting ${modelId}, attaching to existing promise.`);
     return activeBoots.get(modelId)!;
   }
 
+  const startTime = performance.now();
+
   const bootPromise = (async () => {
     try {
-      // 0) Check WebGPU support
-      if (!(navigator as any).gpu) {
-        throw new Error("WebGPU is not supported in this browser. Please use Chrome or Edge and ensure WebGPU is enabled in chrome://flags.");
+      onProgress("checking_readiness", 0, "Checking device readiness...");
+      const readiness = await getDeviceReadiness();
+      
+      if (!readiness.webgpuAvailable) {
+        throw new Error("no_webgpu");
+      }
+      if (modelId.includes("q4f16") && !readiness.shaderF16Supported) {
+        throw new Error("no_shader_f16");
+      }
+      if (readiness.quotaEstimate < 2) {
+        throw new Error("low_storage");
       }
 
-      // 1) Ensure storage is persistent (prevents OS eviction)
-      try { 
-        if (navigator.storage && navigator.storage.persist) {
-          const isPersisted = await navigator.storage.persist(); 
-          console.log(`[Boot] Storage persisted: ${isPersisted}`);
-        }
-      } catch (e) {
-        console.warn("Could not request persistent storage:", e);
-      }
+      onProgress("initializing_engine", 0.2, "Initializing WebLLM engine...");
 
-      // 2) Check space
-      try {
-        const stats = await getStorageStats();
-        if (stats) {
-          console.log("Storage estimate:", stats);
-          if (stats.quotaGB - stats.usageGB < 2) {
-            console.warn(`Low storage space: ${(stats.quotaGB - stats.usageGB).toFixed(1)} GB available.`);
-            onProgress(`Warning: Low storage space (${(stats.quotaGB - stats.usageGB).toFixed(1)} GB). Download may fail.`);
-          }
-        }
-      } catch (e) {}
-
-      onProgress("Initializing WebGPU / WebLLM…");
-
-      // 3) Check for shader-f16 support if the model requires it
-      if (modelId.includes("q4f16")) {
-        try {
-          const adapter = await (navigator as any).gpu.requestAdapter();
-          if (adapter && !adapter.features.has("shader-f16")) {
-            throw new Error("This model requires the 'shader-f16' WebGPU extension which is not supported by your browser or hardware. Please try a different model or use a browser that supports this feature (like Chrome or Edge on compatible hardware).");
-          }
-        } catch (e: any) {
-          if (e.message.includes("shader-f16")) throw e;
-          console.warn("[Boot] Could not verify shader-f16 support:", e);
-        }
-      }
-
-      // 4) Start WebLLM engine with progress callback
-      // WebLLM handles its own caching in the Cache API.
-      console.log(`[Boot] Starting CreateMLCEngine for ${modelId}`);
       const engine = await webllm.CreateMLCEngine(modelId, {
         initProgressCallback: (report) => {
-          console.log(`[WebLLM Progress] ${report.text} (${Math.round(report.progress * 100)}%)`);
-          // WebLLM progress report.progress is 0-1
-          onProgress(report.text, report.progress);
+          onProgress("downloading_model", 0.2 + report.progress * 0.8, report.text);
         },
       });
 
-      onProgress("Model loaded. Ready to chat.", 1);
+      const endTime = performance.now();
+      console.log(`[Boot] ${modelId} boot time: ${((endTime - startTime) / 1000).toFixed(2)}s`);
+
+      onProgress("ready", 1, "Model ready.");
       await setEngine(engine, modelId);
       return engine;
     } catch (engineErr: any) {
-      console.error("[Boot] WebLLM Engine initialization failed:", engineErr);
-      
-      const errStr = String(engineErr.message || engineErr);
-      const isQuota = /quota/i.test(errStr) || engineErr.name === 'QuotaExceededError';
-      
-      if (isQuota) {
-        throw new Error("Storage quota exceeded. WebLLM cannot initialize its internal cache. Please go to Settings and 'Clear Data' to free up space.");
-      }
-      
-      throw new Error(`Failed to initialize WebLLM engine: ${errStr}. Ensure your browser supports WebGPU.`);
+      console.error("[Boot] Initialization failed:", engineErr);
+      throw engineErr;
     } finally {
       activeBoots.delete(modelId);
     }

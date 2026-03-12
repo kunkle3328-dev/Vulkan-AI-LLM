@@ -43,7 +43,7 @@ describe('ModelDownloader', () => {
     });
 
     try {
-      await modelDownloader.downloadModel('test-model', 'http://example.com', () => {});
+      await modelDownloader.downloadModel('test-model', () => {});
       throw new Error('Should have thrown an error');
     } catch (err: any) {
       expect(err.message).toContain('500');
@@ -75,7 +75,7 @@ describe('ModelDownloader', () => {
       } as any);
     });
 
-    await modelDownloader.downloadModel('test-retry', 'http://example.com', () => {});
+    await modelDownloader.downloadModel('test-retry', () => {});
     
     const duration = Date.now() - startTime;
     expect(attempts).toBe(2);
@@ -92,7 +92,7 @@ describe('ModelDownloader', () => {
       headers: new Headers({ 'Content-Length': '5000' })
     });
 
-    await modelDownloader.downloadModel('test-resume', 'http://example.com', () => {});
+    await modelDownloader.downloadModel('test-resume', () => {});
 
     expect(deleteSpy).toHaveBeenCalledWith('test-resume');
   });
@@ -106,7 +106,7 @@ describe('ModelDownloader', () => {
     });
 
     try {
-      await modelDownloader.downloadModel('test-empty', 'http://example.com', () => {});
+      await modelDownloader.downloadModel('test-empty', () => {});
     } catch (err: any) {
       expect(err.message).not.toBe('404 -');
       expect(err.message).toContain('Not Found');

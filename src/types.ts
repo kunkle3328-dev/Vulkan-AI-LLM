@@ -1,4 +1,80 @@
-export type ModelStatus = 'READY' | 'DOWNLOADING' | 'NOT_INSTALLED' | 'SUSPENDED';
+export type ModelStatus = 
+  | 'NOT_INSTALLED' 
+  | 'DOWNLOADING' 
+  | 'VERIFYING' 
+  | 'INSTALLED' 
+  | 'READY' 
+  | 'SUSPENDED' 
+  | 'INCOMPATIBLE' 
+  | 'CORRUPTED'
+  | 'FAILED';
+
+export type ModelInstallState = ModelStatus;
+
+export enum RuntimeSource {
+  CLOUD = "cloud",
+  LOCAL = "local",
+}
+
+export interface ModelManifest {
+  modelId: string;
+  canonicalName: string;
+  alias: string;
+  provider: string;
+  quantization: string;
+  artifactUrls: string[];
+  expectedSha256: string[];
+  totalBytes: number;
+  minRAM: number;
+  recommendedRAM: number;
+  visionSupport: boolean;
+  tags: string[];
+}
+
+export interface DeviceReadinessReport {
+  webgpuAvailable: boolean;
+  adapterPresent: boolean;
+  shaderF16Supported: boolean;
+  persistentStorageGranted: boolean;
+  quotaEstimate: number;
+  recommendedTier: 'low' | 'medium' | 'high';
+}
+
+export interface BenchmarkResult {
+  modelId: string;
+  tokensPerSecond: number;
+  timestamp: string;
+}
+
+export interface ThreadExportPayload {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: string;
+}
+
+export interface PersistedAppState {
+  schemaVersion: number;
+  settings: Settings;
+  threads: ChatThread[];
+}
+
+export interface MessageAttachment {
+  type: 'image' | 'file';
+  url: string;
+  mimeType: string;
+}
+
+export interface CloudFallbackSettings {
+  enabled: boolean;
+  accepted: boolean;
+}
+
+export interface MigrationResult {
+  success: boolean;
+  error?: string;
+  version: number;
+}
 
 export interface Model {
   id: string;
@@ -15,6 +91,15 @@ export interface Model {
   recommendation?: string;
   actualSizeBytes?: number;
   isCached?: boolean;
+  provider?: string;
+  format?: string;
+  quantization?: string;
+  ramRequirementGB?: number;
+  storageRequirementGB?: number;
+  checksum?: string;
+  recommendedDevices?: string[];
+  isFavorite?: boolean;
+  alias?: string;
 }
 
 export interface Settings {
@@ -24,6 +109,16 @@ export interface Settings {
   autoSuspend: boolean;
   suspendOnHide: boolean;
   keepAlive: boolean;
+  localOnlyMode: boolean;
+  cloudFallbackEnabled: boolean;
+  cloudFallbackAccepted: boolean;
+  streamingSpeed: 'Normal' | 'Fast' | 'Instant';
+  contextLength: number;
+  temperature: number;
+  topP: number;
+  maxImageTokens?: number;
+  diagnosticsEnabled: boolean;
+  privacyMode: boolean;
 }
 
 export interface Message {
@@ -31,6 +126,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  attachments?: MessageAttachment[];
 }
 
 export interface ChatThread {
@@ -39,4 +135,5 @@ export interface ChatThread {
   modelId: string;
   messages: Message[];
   createdAt: string;
+  isPinned?: boolean;
 }

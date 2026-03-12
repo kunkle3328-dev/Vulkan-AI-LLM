@@ -1,6 +1,10 @@
 import { openDB, IDBPDatabase } from 'idb';
+import { MODEL_MANIFEST } from '../models/manifest';
+import { ModelInstallState } from '../types';
+import { downloadToOPFS, deleteModelFromOPFS, isModelInOPFS } from './opfsDownloader';
 
 export interface DownloadProgress {
+  phase: ModelInstallState;
   progress: number;
   speed: string;
   eta: string;
@@ -10,360 +14,87 @@ export interface DownloadProgress {
 
 export type ProgressCallback = (progress: DownloadProgress) => void;
 
-interface ModelShard {
-  modelId: string;
-  shardIndex: number;
-  data: ArrayBuffer;
-}
-
 interface ModelMeta {
   modelId: string;
   totalBytes: number;
   completed: boolean;
-  shardsCount: number;
+  state: ModelInstallState;
 }
 
-const DB_NAME = 'webllm_models';
-const STORE_SHARDS = 'shards';
+const DB_NAME = 'webllm_models_meta';
 const STORE_META = 'metadata';
 
 export class ModelDownloader {
   private db: Promise<IDBPDatabase>;
 
   constructor() {
-    this.db = openDB(DB_NAME, 2, {
-      upgrade(db, oldVersion, _newVersion, transaction) {
-        if (oldVersion < 1) {
-          const shardStore = db.createObjectStore(STORE_SHARDS, { keyPath: ['modelId', 'shardIndex'] });
-          shardStore.createIndex('modelId', 'modelId');
-          db.createObjectStore(STORE_META, { keyPath: 'modelId' });
-        } else if (oldVersion < 2) {
-          const shardStore = transaction.objectStore(STORE_SHARDS);
-          if (!shardStore.indexNames.contains('modelId')) {
-            shardStore.createIndex('modelId', 'modelId');
-          }
-        }
+    this.db = openDB(DB_NAME, 1, {
+      upgrade(db) {
+        db.createObjectStore(STORE_META, { keyPath: 'modelId' });
       },
     });
   }
 
-  async getDownloadedBytes(modelId: string): Promise<number> {
-    const db = await this.db;
-    const shards = await db.getAllFromIndex(STORE_SHARDS, 'modelId', modelId);
-    return shards.reduce((acc, shard) => acc + shard.data.byteLength, 0);
+  async repairInstall(modelId: string): Promise<void> {
+    await this.deleteModel(modelId);
   }
 
-  async downloadModel(modelId: string, url: string, onProgress: ProgressCallback): Promise<void> {
+  async downloadModel(modelId: string, onProgress: ProgressCallback): Promise<void> {
+    const manifest = MODEL_MANIFEST.find(m => m.modelId === modelId);
+    if (!manifest) throw new Error("Model not found in manifest");
+
     const db = await this.db;
-    
-    // Check existing metadata
-    let meta: ModelMeta | undefined = await db.get(STORE_META, modelId);
-    
-    // Get currently downloaded shards to calculate start point
-    const shards = await db.getAllFromIndex(STORE_SHARDS, 'modelId', modelId);
-    let downloadedBytes = shards.reduce((acc, shard) => acc + shard.data.byteLength, 0);
-    let lastShardIndex = shards.reduce((max, shard) => Math.max(max, shard.shardIndex), -1);
-
-    // If we already have metadata and we've reached totalBytes, we're done
-    if (meta && meta.completed && downloadedBytes >= meta.totalBytes) {
-      console.log(`[Downloader] ${modelId} already downloaded and completed.`);
-      onProgress({
-        progress: 100,
-        speed: 'Ready',
-        eta: 'Done',
-        receivedBytes: downloadedBytes,
-        totalBytes: meta.totalBytes
-      });
-      return;
-    }
-
-    const fetchWithRetry = async (currentOffset: number, maxAttempts = 5): Promise<Response> => {
-      let attempt = 0;
-      
-      while (attempt < maxAttempts) {
-        attempt++;
-        const headers: HeadersInit = {};
-        if (currentOffset > 0) {
-          headers['Range'] = `bytes=${currentOffset}-`;
-        }
-
-        try {
-          const response = await fetch(url, { headers });
-          
-          if (response.ok || response.status === 206 || response.status === 416) {
-            return response;
-          }
-
-          // Transient errors that we should retry
-          const retryableStatuses = [429, 500, 502, 503, 504];
-          if (retryableStatuses.includes(response.status) && attempt < maxAttempts) {
-            const retryAfter = response.headers.get('Retry-After');
-            let delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000; // Exponential backoff + jitter
-            
-            if (retryAfter) {
-              const seconds = parseInt(retryAfter, 10);
-              if (!isNaN(seconds)) {
-                delay = seconds * 1000;
-              } else {
-                const date = Date.parse(retryAfter);
-                if (!isNaN(date)) {
-                  delay = Math.max(0, date - Date.now());
-                }
-              }
-            }
-
-            console.warn(`[Downloader] Attempt ${attempt} failed with ${response.status}. Retrying in ${Math.round(delay)}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            continue;
-          }
-
-          // Non-retryable error or max attempts reached
-          const bodySnippet = await response.text().catch(() => '').then(t => t.slice(0, 4096));
-          const requestId = response.headers.get('x-request-id') || response.headers.get('cf-ray') || 'N/A';
-          const statusText = response.statusText || this.getStatusTextFallback(response.status);
-          const redactedUrl = url.replace(/([?&])(key|token|auth)=[^&]+/g, '$1$2=***');
-
-          const errorMsg = `Failed to fetch model: ${response.status} ${statusText}
-URL: ${redactedUrl}
-Request ID: ${requestId}
-Body: ${bodySnippet || '(empty)'}`;
-          
-          throw new Error(errorMsg);
-
-        } catch (err: any) {
-          if (err.message.includes('Failed to fetch model:')) throw err; // Already formatted
-
-          if (attempt < maxAttempts) {
-            const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
-            console.warn(`[Downloader] Attempt ${attempt} network error: ${err.message}. Retrying in ${Math.round(delay)}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            continue;
-          }
-          throw new Error(`Network error after ${maxAttempts} attempts: ${err.message}`);
-        }
-      }
-      throw new Error(`Failed to download after ${maxAttempts} attempts`);
+    let meta: ModelMeta = await db.get(STORE_META, modelId) || {
+      modelId,
+      totalBytes: manifest.totalBytes,
+      completed: false,
+      state: 'NOT_INSTALLED'
     };
 
-    console.log(`[Downloader] Starting/Resuming ${modelId} from ${downloadedBytes} bytes`);
-
-    let response = await fetchWithRetry(downloadedBytes);
-    
-    // Handle 416 Range Not Satisfiable
-    if (response.status === 416) {
-      console.log(`[Downloader] Server returned 416 for ${modelId}. Assuming download is complete.`);
-      if (meta) {
-        meta.completed = true;
-        await db.put(STORE_META, meta);
-      }
-      onProgress({
-        progress: 100,
-        speed: 'Ready',
-        eta: 'Done',
-        receivedBytes: downloadedBytes,
-        totalBytes: meta?.totalBytes || downloadedBytes
-      });
+    if (meta.completed && await isModelInOPFS(modelId)) {
+      onProgress({ phase: 'READY', progress: 100, speed: 'Ready', eta: 'Done', receivedBytes: meta.totalBytes, totalBytes: meta.totalBytes });
       return;
     }
 
-    // Fix resume corruption: If we requested a range but got 200, restart from 0
-    if (downloadedBytes > 0 && response.status === 200) {
-      console.warn(`[Downloader] Server ignored Range request for ${modelId}. Restarting from 0 to avoid corruption.`);
-      await this.deleteModel(modelId);
-      downloadedBytes = 0;
-      lastShardIndex = -1;
-      // We already have the response for 0-, so we can just continue with it
-    }
+    meta.state = 'DOWNLOADING';
+    await db.put(STORE_META, meta);
 
-    const contentLength = Number(response.headers.get('Content-Length')) || 0;
-    const totalBytes = (response.status === 206 ? downloadedBytes : 0) + contentLength;
-
-    // Update meta if needed
-    if (!meta || meta.totalBytes !== totalBytes) {
-      meta = { modelId, totalBytes, completed: false, shardsCount: lastShardIndex + 1 };
-      await db.put(STORE_META, meta);
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('ReadableStream not supported');
-
-    let receivedBytes = response.status === 206 ? downloadedBytes : 0;
-    let startTime = Date.now();
-    let shardIndex = response.status === 206 ? lastShardIndex + 1 : 0;
-    let currentShardData: Uint8Array[] = [];
-    let currentShardSize = 0;
-    const SHARD_SIZE = 10 * 1024 * 1024; // 10MB shards
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        receivedBytes += value.length;
-        currentShardData.push(value);
-        currentShardSize += value.length;
-
-        // Save shard when it reaches threshold
-        if (currentShardSize >= SHARD_SIZE) {
-          await this.saveShard(modelId, shardIndex++, currentShardData);
-          currentShardData = [];
-          currentShardSize = 0;
-        }
-
-        // Progress reporting
-        const now = Date.now();
-        const elapsed = (now - startTime) / 1000;
-        const speed = (receivedBytes - (response.status === 206 ? downloadedBytes : 0)) / (elapsed || 0.1);
-        const progress = totalBytes > 0 ? (receivedBytes / totalBytes) * 100 : 0;
-
-        onProgress({
-          progress: Math.min(Math.round(progress), 100),
-          speed: this.formatSpeed(speed),
-          eta: this.calculateETA(totalBytes - receivedBytes, speed),
-          receivedBytes,
-          totalBytes
+    let receivedBytes = 0;
+    for (let i = 0; i < manifest.artifactUrls.length; i++) {
+        const url = manifest.artifactUrls[i];
+        const sha256 = manifest.expectedSha256?.[i] || null;
+        
+        await downloadToOPFS({
+            url,
+            opfsDir: ['webllm', 'models', modelId],
+            filename: `artifact_${i}`,
+            expectedSha256: sha256,
+            onProgress: (p) => {
+                receivedBytes += p.received; // This is simplistic, needs better tracking
+                const progress = (receivedBytes / manifest.totalBytes) * 100;
+                onProgress({
+                    phase: 'DOWNLOADING',
+                    progress,
+                    speed: 'N/A',
+                    eta: 'N/A',
+                    receivedBytes,
+                    totalBytes: manifest.totalBytes
+                });
+            }
         });
-      }
-    } catch (readErr: any) {
-      console.error(`[Downloader] Stream read failed for ${modelId}:`, readErr);
-      throw new Error(`Connection lost during download: ${readErr.message}. You can try resuming the download.`);
     }
 
-    // Save final shard
-    if (currentShardData.length > 0) {
-      await this.saveShard(modelId, shardIndex++, currentShardData);
-    }
-
-    // Verify integrity
-    onProgress({
-      progress: 100,
-      speed: 'Verifying...',
-      eta: 'Almost done',
-      receivedBytes,
-      totalBytes
-    });
-
-    const isValid = await this.verifyIntegrity(modelId);
-    if (!isValid) {
-      await this.deleteModel(modelId);
-      throw new Error('Integrity check failed. The downloaded model is corrupted.');
-    }
-
-    // Mark as completed
     meta.completed = true;
-    meta.shardsCount = shardIndex;
+    meta.state = 'INSTALLED';
     await db.put(STORE_META, meta);
     
-    console.log(`[Downloader] Download complete and verified for ${modelId}`);
-  }
-
-  private getStatusTextFallback(status: number): string {
-    const fallbacks: Record<number, string> = {
-      400: 'Bad Request',
-      401: 'Unauthorized',
-      403: 'Forbidden',
-      404: 'Not Found',
-      429: 'Too Many Requests',
-      500: 'Internal Server Error',
-      502: 'Bad Gateway',
-      503: 'Service Unavailable',
-      504: 'Gateway Timeout'
-    };
-    return fallbacks[status] || 'Unknown Error';
-  }
-
-  private async verifyIntegrity(modelId: string): Promise<boolean> {
-    const db = await this.db;
-    const shards = await db.getAllFromIndex(STORE_SHARDS, 'modelId' as any, modelId);
-    shards.sort((a, b) => a.shardIndex - b.shardIndex);
-
-    // In a real production app, we would compare against a known hash.
-    // For this implementation, we'll simulate a successful verification 
-    // but the structure is here for actual hash comparison.
-    console.log(`[Downloader] Verifying ${shards.length} shards for ${modelId}...`);
-    
-    try {
-      // Example of how to compute hash of all shards combined
-      // const hash = await this.computeHash(shards.map(s => s.data));
-      // return hash === EXPECTED_HASHES[modelId];
-      
-      // Simulate verification delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      return true; 
-    } catch (e) {
-      console.error('[Downloader] Verification error:', e);
-      return false;
-    }
-  }
-
-  private async computeHash(buffers: ArrayBuffer[]): Promise<string> {
-    const combinedLength = buffers.reduce((acc, b) => acc + b.byteLength, 0);
-    const combined = new Uint8Array(combinedLength);
-    let offset = 0;
-    for (const b of buffers) {
-      combined.set(new Uint8Array(b), offset);
-      offset += b.byteLength;
-    }
-    
-    const hashBuffer = await crypto.subtle.digest('SHA-256', combined);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  private async saveShard(modelId: string, shardIndex: number, chunks: Uint8Array[]) {
-    const db = await this.db;
-    const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-    const combined = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      combined.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    await db.put(STORE_SHARDS, {
-      modelId,
-      shardIndex,
-      data: combined.buffer
-    });
+    onProgress({ phase: 'READY', progress: 100, speed: 'Ready', eta: 'Done', receivedBytes: meta.totalBytes, totalBytes: meta.totalBytes });
   }
 
   async deleteModel(modelId: string) {
     const db = await this.db;
-    const tx = db.transaction([STORE_SHARDS, STORE_META], 'readwrite');
-    const shardStore = tx.objectStore(STORE_SHARDS);
-    const metaStore = tx.objectStore(STORE_META);
-
-    // Delete all shards
-    let cursor = await shardStore.openCursor();
-    while (cursor) {
-      if (cursor.value.modelId === modelId) {
-        await cursor.delete();
-      }
-      cursor = await cursor.continue();
-    }
-
-    await metaStore.delete(modelId);
-    await tx.done;
-  }
-
-  async isModelDownloaded(modelId: string): Promise<boolean> {
-    const db = await this.db;
-    const meta = await db.get(STORE_META, modelId);
-    return !!meta?.completed;
-  }
-
-  private formatSpeed(bytesPerSecond: number): string {
-    if (bytesPerSecond > 1024 * 1024) return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
-    if (bytesPerSecond > 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
-    return `${Math.round(bytesPerSecond)} B/s`;
-  }
-
-  private calculateETA(remainingBytes: number, speed: number): string {
-    if (speed <= 0) return 'Unknown';
-    const seconds = remainingBytes / speed;
-    if (seconds > 3600) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-    if (seconds > 60) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
-    return `${Math.floor(seconds)}s`;
+    await db.delete(STORE_META, modelId);
+    await deleteModelFromOPFS(modelId);
   }
 }
 

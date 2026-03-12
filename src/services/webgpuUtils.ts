@@ -1,4 +1,4 @@
-let cachedFeatures: { supported: boolean, hasF16: boolean, error: string | null } | null = null;
+let cachedFeatures: { supported: boolean, hasF16: boolean, adapterName?: string, error: string | null } | null = null;
 
 export async function checkWebGPUFeatures() {
   if (cachedFeatures) return cachedFeatures;
@@ -26,6 +26,7 @@ export async function checkWebGPUFeatures() {
     cachedFeatures = {
       supported: true,
       hasF16: adapter.features.has("shader-f16"),
+      adapterName: (adapter as any).name || "WebGPU Adapter",
       error: null
     };
     return cachedFeatures;

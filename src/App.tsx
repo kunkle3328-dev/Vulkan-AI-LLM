@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, memo } from 'react';
 import { 
   Menu, 
   Shield, 
+  ShieldAlert,
   Send, 
   Trash2, 
   Download, 
@@ -17,21 +18,23 @@ import {
   Loader2,
   AlertCircle,
   Copy,
-  Check
+  Check,
+  Search,
+  Star,
+  Edit2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Model, Settings, Message, ModelStatus, ChatThread } from './types';
-import { streamChatResponse } from './services/geminiService';
-import { modelDownloader } from './services/modelDownloader';
+import { ModelDownloader, modelDownloader } from './services/modelDownloader';
+import { MODEL_MANIFEST } from './models/manifest';
 
 import { boot } from './services/webllmBoot';
 import { checkWebGPUFeatures } from './services/webgpuUtils';
 import { getEngine, streamWebLLMChat, getCurrentModelId, getLastModelId, unloadEngine } from './services/webllmService';
+import { streamCloudFallbackChat } from './services/cloudFallbackService';
 import { initLifecycleManager } from './services/modelLifecycleService';
 import { isModelInOPFS, deleteModelFromOPFS } from './services/opfsDownloader';
 import { 
@@ -45,396 +48,43 @@ import {
   deleteModelFromCache,
   StorageStats 
 } from './services/storageService';
+import { cn } from './utils/cn';
+import { SplashScreen } from './components/ui/SplashScreen';
+import { DEFAULT_SETTINGS } from './settings/SettingsManager';
 
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
+// const modelDownloader = new ModelDownloader(); // Removed local instance
 
-const INITIAL_MODELS: Model[] = [
-  {
-    id: 'Llama-3.2-3B-Instruct-q4f16_1-MLC',
-    name: 'Llama 3.2 3B',
-    runtime: 'WEBLLM',
-    size: '1.8 GB',
-    sizeBytes: 1932735283,
-    tags: ['FAST', 'MOBILE OPTIMIZED'],
-    status: 'NOT_INSTALLED',
-    description: 'Meta\'s Llama 3.2 3B Instruct model. Optimized for mobile devices with high quality and speed.',
-    recommendation: 'Best for Galaxy S25 and modern Android phones. Fast and capable.'
-  },
-  {
-    id: 'Qwen2.5-3B-Instruct-q4f16_1-MLC',
-    name: 'Qwen 2.5 3B',
-    runtime: 'WEBLLM',
-    size: '1.9 GB',
-    sizeBytes: 2040109465,
-    tags: ['BALANCED', 'MOBILE'],
-    status: 'NOT_INSTALLED',
-    description: 'Alibaba\'s Qwen 2.5 3B model. Exceptional performance for its size, especially in math and coding.',
-    recommendation: 'Perfect for high-end mobile devices like Galaxy S25. Very balanced and capable.'
-  },
-  {
-    id: 'Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC',
-    name: 'Qwen 2.5 Coder 3B',
-    runtime: 'WEBLLM',
-    size: '1.9 GB',
-    sizeBytes: 2040109465,
-    tags: ['CODING', 'MOBILE'],
-    status: 'NOT_INSTALLED',
-    description: 'Specialized coding version of Qwen 2.5 3B. Highly capable at programming tasks.',
-    recommendation: 'Best for developers on mobile. Fast and accurate coding assistance.'
-  },
-  {
-    id: 'gemma-2-2b-it-q4f16_1-MLC',
-    name: 'Gemma 2 2B',
-    runtime: 'WEBLLM',
-    size: '1.6 GB',
-    sizeBytes: 1717986918,
-    tags: ['EFFICIENT', 'GOOGLE'],
-    status: 'NOT_INSTALLED',
-    description: 'Google\'s latest Gemma 2 2B model. Offers state-of-the-art performance for its compact size.',
-    recommendation: 'Highly recommended for Galaxy S25. Exceptional quality-to-size ratio.'
-  },
-  {
-    id: 'DeepSeek-R1-Distill-Qwen-1.5B-q4f16_1-MLC',
-    name: 'DeepSeek R1 Qwen 1.5B',
-    runtime: 'WEBLLM',
-    size: '1.1 GB',
-    sizeBytes: 1181116006,
-    tags: ['REASONING', 'FAST'],
-    status: 'NOT_INSTALLED',
-    description: 'DeepSeek R1 distilled model based on Qwen 1.5B. Specialized in complex reasoning and logic.',
-    recommendation: 'Best for logical tasks on mobile. Very fast reasoning.'
-  },
-  {
-    id: 'DeepSeek-R1-Distill-Llama-8B-q4f16_1-MLC',
-    name: 'DeepSeek R1 Llama 8B',
-    runtime: 'WEBLLM',
-    size: '5.2 GB',
-    sizeBytes: 5583457484,
-    tags: ['REASONING', 'POWERFUL'],
-    status: 'NOT_INSTALLED',
-    description: 'DeepSeek R1 distilled model based on Llama 3 8B. Industry-leading reasoning performance.',
-    recommendation: 'Best for high-end mobile devices like S25 Ultra or desktops. Requires 8GB+ RAM.'
-  },
-  {
-    id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
-    name: 'Llama 3.2 1B',
-    runtime: 'WEBLLM',
-    size: '0.8 GB',
-    sizeBytes: 858993459,
-    tags: ['ULTRA-FAST', 'MOBILE'],
-    status: 'NOT_INSTALLED',
-    description: 'Meta\'s smallest Llama 3.2 model. Extremely fast and efficient for basic tasks.',
-    recommendation: 'Best for entry-level mobile devices and ultra-fast responses.'
-  },
-  {
-    id: 'Llama-3-8B-Instruct-q4f16_1-MLC',
-    name: 'Llama 3 8B',
-    runtime: 'WEBLLM',
-    size: '4.7 GB',
-    sizeBytes: 5046586572,
-    tags: ['POWERFUL', 'GENERAL'],
-    status: 'NOT_INSTALLED',
-    description: 'The latest generation of Meta\'s Llama models. Offers industry-leading performance for its parameter class.',
-    recommendation: 'Recommended for high-end PCs with dedicated GPUs. Best for creative writing and complex reasoning.'
-  },
-  {
-    id: 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC',
-    name: 'Mistral 7B v0.3',
-    runtime: 'WEBLLM',
-    size: '4.1 GB',
-    sizeBytes: 4402341478,
-    tags: ['BALANCED', 'CODING'],
-    status: 'NOT_INSTALLED',
-    description: 'A highly efficient and versatile model from Mistral AI. Known for its strong performance in coding and English tasks.',
-    recommendation: 'Recommended for devices with at least 8GB RAM. Best for coding assistance and general purpose chat.'
-  },
-  {
-    id: 'Qwen2-1.5B-Instruct-q4f16_1-MLC',
-    name: 'Qwen2 1.5B',
-    runtime: 'WEBLLM',
-    size: '1.1 GB',
-    sizeBytes: 1181116006,
-    tags: ['FAST', 'MULTILINGUAL'],
-    status: 'NOT_INSTALLED',
-    description: 'Alibaba\'s Qwen2 1.5B Instruct model. Excellent multilingual support and reasoning for its size.',
-    recommendation: 'Great for multilingual tasks and efficient reasoning on mid-range devices.'
-  },
-  {
-    id: 'DeepSeek-Coder-V2-Lite-Instruct-q4f16_1-MLC',
-    name: 'DeepSeek Coder V2 Lite',
-    runtime: 'WEBLLM',
-    size: '4.5 GB',
-    sizeBytes: 4831838208,
-    tags: ['CODING', 'POWERFUL'],
-    status: 'NOT_INSTALLED',
-    description: 'DeepSeek\'s specialized coding model. Highly capable at programming tasks across many languages.',
-    recommendation: 'Best for developers and complex coding assistance. Requires 8GB+ RAM.'
-  },
-  {
-    id: 'Phi-3-mini-4k-instruct-q4f16_1-MLC',
-    name: 'Phi-3 Mini (3.8B)',
-    runtime: 'WEBLLM',
-    size: '2.14 GB',
-    sizeBytes: 2297503744,
-    tags: ['CHAT', 'REASONING'],
-    status: 'NOT_INSTALLED',
-    description: 'Microsoft\'s highly capable small language model. Excels at reasoning, logic, and math tasks despite its size.',
-    recommendation: 'Recommended for mid-range devices. Best for logical reasoning and structured data tasks.'
-  },
-  {
-    id: 'gemma-2b-it-q4f16_1-MLC',
-    name: 'Gemma 2B IT',
-    runtime: 'WEBLLM',
-    size: '1.4 GB',
-    sizeBytes: 1503238553,
-    tags: ['LIGHTWEIGHT', 'GOOGLE'],
-    status: 'NOT_INSTALLED',
-    description: 'Google\'s lightweight Gemma model. Fast and efficient for simple tasks and chat.',
-    recommendation: 'Best for entry-level devices. Very fast response times.'
-  },
-  {
-    id: 'TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC',
-    name: 'TinyLlama 1.1B',
-    runtime: 'WEBLLM',
-    size: '0.7 GB',
-    sizeBytes: 751619276,
-    tags: ['LIGHTWEIGHT', 'FAST'],
-    status: 'NOT_INSTALLED',
-    description: 'A compact 1.1B parameter model trained on 3 trillion tokens. Surprisingly capable for its size.',
-    recommendation: 'Perfect for low-resource devices and simple chat interactions.'
-  },
-  {
-    id: 'SmolLM-135M-Instruct-q4f16_1-MLC',
-    name: 'SmolLM 135M',
-    runtime: 'WEBLLM',
-    size: '0.1 GB',
-    sizeBytes: 107374182,
-    tags: ['EXPERIMENTAL', 'TINY'],
-    status: 'NOT_INSTALLED',
-    description: 'Hugging Face\'s ultra-compact SmolLM model. Designed for testing and extremely low-resource environments.',
-    recommendation: 'Experimental use only. Useful for testing the app infrastructure without large downloads.'
-  },
-  {
-    id: 'Llama-3.1-8B-Instruct-q4f16_1-MLC',
-    name: 'Llama 3.1 8B',
-    runtime: 'WEBLLM',
-    size: '5.1 GB',
-    sizeBytes: 5476083302,
-    tags: ['POWERFUL', 'LATEST'],
-    status: 'NOT_INSTALLED',
-    description: 'The upgraded Llama 3.1 model with 128k context support. Offers significant improvements in reasoning and multilingual capabilities.',
-    recommendation: 'Recommended for high-end PCs. Best for long-context tasks and complex reasoning.'
-  },
-  {
-    id: 'Qwen2.5-7B-Instruct-q4f16_1-MLC',
-    name: 'Qwen 2.5 7B',
-    runtime: 'WEBLLM',
-    size: '4.5 GB',
-    sizeBytes: 4831838208,
-    tags: ['BALANCED', 'MULTILINGUAL'],
-    status: 'NOT_INSTALLED',
-    description: 'Alibaba\'s latest Qwen 2.5 model. Highly competitive performance across benchmarks, especially in math and coding.',
-    recommendation: 'Excellent all-rounder for devices with 8GB+ RAM.'
-  },
-  {
-    id: 'Phi-3.5-mini-instruct-q4f16_1-MLC',
-    name: 'Phi-3.5 Mini',
-    runtime: 'WEBLLM',
-    size: '2.2 GB',
-    sizeBytes: 2362232012,
-    tags: ['REASONING', 'MICROSOFT'],
-    status: 'NOT_INSTALLED',
-    description: 'The latest iteration of Microsoft\'s Phi-3.5 mini. Enhanced reasoning capabilities and improved instruction following.',
-    recommendation: 'Great for logical tasks on mid-range hardware.'
-  },
-  {
-    id: 'Gemma-2-9b-it-q4f16_1-MLC',
-    name: 'Gemma 2 9B',
-    runtime: 'WEBLLM',
-    size: '5.5 GB',
-    sizeBytes: 5905580032,
-    tags: ['POWERFUL', 'GOOGLE'],
-    status: 'NOT_INSTALLED',
-    description: 'Google\'s Gemma 2 9B model. Features a new architecture that delivers class-leading performance for its size.',
-    recommendation: 'Best for high-end desktops. Exceptional quality for creative and analytical tasks.'
-  },
-  {
-    id: 'SmolLM2-1.7B-Instruct-q4f16_1-MLC',
-    name: 'SmolLM2 1.7B',
-    runtime: 'WEBLLM',
-    size: '1.1 GB',
-    sizeBytes: 1181116006,
-    tags: ['FAST', 'EFFICIENT'],
-    status: 'NOT_INSTALLED',
-    description: 'The second generation of SmolLM. Significantly more capable than the first version while remaining extremely fast.',
-    recommendation: 'Excellent for mobile devices and fast interactions.'
-  },
-  {
-    id: 'SmolLM2-360M-Instruct-q4f16_1-MLC',
-    name: 'SmolLM2 360M',
-    runtime: 'WEBLLM',
-    size: '0.3 GB',
-    sizeBytes: 322122547,
-    tags: ['ULTRA-LIGHT', 'FAST'],
-    status: 'NOT_INSTALLED',
-    description: 'A tiny but surprisingly smart model. Perfect for basic classification or simple chat on very low-end hardware.',
-    recommendation: 'Best for testing or extremely resource-constrained environments.'
-  }
-];
-
-const DEFAULT_SETTINGS: Settings = {
-  performanceMode: 'Balanced',
-  isolatedInference: true,
-  vulkanAcceleration: false,
-  autoSuspend: true,
-  suspendOnHide: false,
-  keepAlive: true
-};
-
-function VulkanLogo({ className = "w-8 h-8", animated = true }: { className?: string, animated?: boolean }) {
+function VulkanLogo({ className }: { className?: string }) {
   return (
-    <div className={cn("relative flex items-center justify-center", className)}>
-      <motion.svg 
-        viewBox="0 0 100 100" 
-        className="w-full h-full"
-        initial={animated ? { rotate: -90, opacity: 0 } : false}
-        animate={animated ? { rotate: 0, opacity: 1 } : false}
-        transition={{ duration: 1, ease: "easeOut" }}
-      >
-        {/* Outer Hexagon */}
-        <motion.path
-          d="M50 5 L90 25 L90 75 L50 95 L10 75 L10 25 Z"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          initial={animated ? { pathLength: 0 } : false}
-          animate={animated ? { pathLength: 1 } : false}
-          transition={{ duration: 2, ease: "easeInOut" }}
-          className="text-emerald-500"
-        />
-        {/* Inner Core */}
-        <motion.path
-          d="M50 25 L75 40 L75 60 L50 75 L25 60 L25 40 Z"
-          fill="currentColor"
-          initial={animated ? { scale: 0, opacity: 0 } : false}
-          animate={animated ? { scale: [0, 1.2, 1], opacity: 1 } : false}
-          transition={{ delay: 1, duration: 1, times: [0, 0.7, 1] }}
-          className="text-emerald-400"
-        />
-        {/* Pulsing Ring */}
-        {animated && (
-          <motion.path
-            d="M50 5 L90 25 L90 75 L50 95 L10 75 L10 25 Z"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="4"
-            animate={{ scale: [1, 1.1, 1], opacity: [0.3, 0, 0.3] }}
-            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-            className="text-emerald-500/30"
-          />
-        )}
-      </motion.svg>
-    </div>
-  );
-}
-
-function SplashScreen({ onComplete }: { onComplete: () => void }) {
-  const [logs, setLogs] = useState<string[]>([]);
-  const [progress, setProgress] = useState(0);
-  
-  const bootSequence = [
-    "INITIALIZING VULKAN KERNEL v4.2.0...",
-    "CHECKING WEBGPU CAPABILITIES...",
-    "DETECTING HARDWARE ACCELERATION...",
-    "MOUNTING OPFS STORAGE SYSTEM...",
-    "LOADING NEURAL ENGINE RUNTIME...",
-    "VERIFYING MODEL REGISTRY INTEGRITY...",
-    "ESTABLISHING SECURE INFERENCE TUNNEL...",
-    "SYSTEM READY. WELCOME TO THE FUTURE."
-  ];
-
-  useEffect(() => {
-    let currentLog = 0;
-    const logInterval = setInterval(() => {
-      if (currentLog < bootSequence.length) {
-        setLogs(prev => [...prev, `> ${bootSequence[currentLog]}`]);
-        currentLog++;
-        setProgress((currentLog / bootSequence.length) * 100);
-      } else {
-        clearInterval(logInterval);
-        setTimeout(onComplete, 1000);
-      }
-    }, 400);
-
-    return () => clearInterval(logInterval);
-  }, []);
-
-  return (
-    <motion.div 
-      initial={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-[#050505] z-[100] flex flex-col items-center justify-center p-8 font-mono"
+    <svg 
+      viewBox="0 0 24 24" 
+      fill="none" 
+      xmlns="http://www.w3.org/2000/svg" 
+      className={cn("text-emerald-500", className)}
     >
-      <div className="scanline" />
-      
-      <div className="max-w-md w-full space-y-8">
-        <div className="flex flex-col items-center gap-6">
-          <VulkanLogo className="w-24 h-24" />
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.5 }}
-            className="text-center"
-          >
-            <h1 className="text-3xl font-bold tracking-[0.2em] text-emerald-500 terminal-glow">VULKAN AI</h1>
-            <p className="text-emerald-500/40 text-xs mt-2 tracking-widest uppercase">Decentralized Local Intelligence</p>
-          </motion.div>
-        </div>
-
-        <div className="space-y-4 bg-black/40 border border-emerald-500/20 p-6 rounded-lg backdrop-blur-sm">
-          <div className="h-48 overflow-hidden flex flex-col justify-end gap-1">
-            <AnimatePresence mode="popLayout">
-              {logs.map((log, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="text-[10px] text-emerald-500/70 leading-relaxed"
-                >
-                  {log}
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-          
-          <div className="space-y-2">
-            <div className="flex justify-between text-[10px] text-emerald-500/40 uppercase tracking-tighter">
-              <span>Booting System</span>
-              <span>{Math.round(progress)}%</span>
-            </div>
-            <div className="h-1 w-full bg-emerald-500/10 rounded-full overflow-hidden">
-              <motion.div 
-                className="h-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]"
-                animate={{ width: `${progress}%` }}
-                transition={{ duration: 0.3 }}
-              />
-            </div>
-          </div>
-        </div>
-
-        <motion.div 
-          animate={{ opacity: [0.4, 1, 0.4] }}
-          transition={{ duration: 2, repeat: Infinity }}
-          className="text-center text-[9px] text-emerald-500/20 uppercase tracking-[0.3em]"
-        >
-          Secure Environment Active
-        </motion.div>
-      </div>
-    </motion.div>
+      <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M2 17L12 22L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
   );
 }
+
+const INITIAL_MODELS: Model[] = MODEL_MANIFEST.map(m => ({
+  id: m.modelId,
+  name: m.canonicalName,
+  runtime: 'WEBLLM',
+  size: (m.totalBytes / (1024 ** 3)).toFixed(1) + ' GB',
+  sizeBytes: m.totalBytes,
+  tags: m.tags,
+  status: 'NOT_INSTALLED',
+  description: `Model from ${m.provider} with ${m.quantization} quantization.`,
+  recommendation: `Recommended for devices with ${m.recommendedRAM}GB+ RAM.`,
+  provider: m.provider,
+  quantization: m.quantization,
+  ramRequirementGB: m.minRAM,
+  storageRequirementGB: Math.ceil(m.totalBytes / (1024 ** 3))
+}));
+
 
 function CopyButton({ text, className }: { text: string, className?: string }) {
   const [copied, setCopied] = useState(false);
@@ -472,27 +122,30 @@ const MessageItem = memo(({ message, isLast }: { message: Message, isLast: boole
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className={cn(
-        "group flex flex-col gap-2 max-w-[85%] md:max-w-[75%]",
-        message.role === 'user' ? "ml-auto items-end" : "mr-auto items-start"
+        "group flex flex-col gap-3 max-w-full",
+        message.role === 'user' ? "items-end" : "items-start"
       )}
     >
-      <div className="flex items-center gap-2 px-2">
-        <span className="text-[10px] text-emerald-500/40 uppercase tracking-widest font-bold">
-          {message.role === 'user' ? 'Local User' : 'Neural Response'}
-        </span>
-        <span className="text-[9px] text-white/10">{message.timestamp}</span>
-        {message.role === 'assistant' && (
-          <CopyButton text={message.content} className="opacity-0 group-hover:opacity-100" />
-        )}
+      <div className={cn(
+        "flex items-center gap-2 px-1",
+        message.role === 'user' ? "flex-row-reverse" : "flex-row"
+      )}>
+        <div className={cn(
+          "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold",
+          message.role === 'user' ? "bg-emerald-500/20 text-emerald-500" : "bg-white/10 text-white/60"
+        )}>
+          {message.role === 'user' ? 'U' : 'AI'}
+        </div>
+        <span className="text-[10px] text-white/20 font-medium">{message.timestamp}</span>
       </div>
       
       <div className={cn(
-        "relative p-4 rounded-2xl text-sm leading-relaxed",
+        "relative p-4 rounded-2xl text-[15px] leading-relaxed transition-all",
         message.role === 'user' 
-          ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-100 rounded-tr-none" 
-          : "bg-white/5 border border-white/10 text-white/90 rounded-tl-none"
+          ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-50" 
+          : "bg-white/5 border border-white/10 text-white/90"
       )}>
-        <div className="prose prose-invert prose-sm max-w-none">
+        <div className="prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-[#0a0a0a] prose-pre:border prose-pre:border-white/5">
           <ReactMarkdown
             components={{
               code({ node, inline, className, children, ...props }: any) {
@@ -515,7 +168,7 @@ const MessageItem = memo(({ message, isLast }: { message: Message, isLast: boole
                     </SyntaxHighlighter>
                   </div>
                 ) : (
-                  <code className={cn("bg-white/10 px-1.5 py-0.5 rounded text-emerald-400", className)} {...props}>
+                  <code className={cn("bg-white/10 px-1.5 py-0.5 rounded text-emerald-400 font-mono", className)} {...props}>
                     {children}
                   </code>
                 );
@@ -530,9 +183,69 @@ const MessageItem = memo(({ message, isLast }: { message: Message, isLast: boole
   );
 });
 
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-screen bg-[#050505] text-emerald-500 p-8 text-center">
+          <ShieldAlert className="w-16 h-16 mb-4 opacity-50" />
+          <h2 className="text-xl font-bold uppercase tracking-widest mb-2">Kernel Panic</h2>
+          <p className="text-xs text-emerald-500/60 font-mono max-w-md mb-6">
+            An unrecoverable error has occurred in the application runtime.
+          </p>
+          <div className="bg-black/50 border border-emerald-500/20 p-4 rounded-lg mb-6 max-w-xl w-full text-left overflow-auto max-h-40">
+            <code className="text-[10px] text-red-400 whitespace-pre-wrap">
+              {this.state.error?.message}
+            </code>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-6 py-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-emerald-500/20 transition-all"
+          >
+            Restart Application
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
   const [showSplash, setShowSplash] = useState(true);
   const [view, setView] = useState<'chat' | 'models' | 'settings'>('chat');
+  const [modelSearch, setModelSearch] = useState('');
+  const [threadSearch, setThreadSearch] = useState('');
+  const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [modelSort, setModelSort] = useState<'name' | 'size' | 'status'>('name');
+  const [modelFilter, setModelFilter] = useState<'all' | 'installed' | 'favorite'>('all');
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    const saved = localStorage.getItem('vulkan_favorites');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [streamingMessage, setStreamingMessage] = useState<{ id: string, content: string } | null>(null);
   const [models, setModels] = useState<Model[]>(() => {
@@ -555,13 +268,13 @@ export default function App() {
         id: idMigration[m.id] || m.id
       }));
 
-      // Sync names and metadata from INITIAL_MODELS to fix identity bugs
+      // Sync names and metadata from MODEL_MANIFEST to fix identity bugs
       const syncedModels = parsed.map(m => {
         // Match either the exact ID or the f16/f32 variant counterpart
-        const initial = INITIAL_MODELS.find(im => 
-          im.id === m.id || 
-          im.id === m.id.replace('q4f32_1', 'q4f16_1') ||
-          im.id === m.id.replace('q4f16_1', 'q4f32_1')
+        const initial = MODEL_MANIFEST.find(im => 
+          im.modelId === m.id || 
+          im.modelId === m.id.replace('q4f32_1', 'q4f16_1') ||
+          im.modelId === m.id.replace('q4f16_1', 'q4f32_1')
         );
         // Reset stuck downloads on load
         const status = m.status === 'DOWNLOADING' ? 'NOT_INSTALLED' : m.status;
@@ -569,26 +282,44 @@ export default function App() {
           return { 
             ...m, 
             status,
-            runtime: initial.runtime, // Ensure runtime is updated
-            name: initial.name, 
+            runtime: 'WEBLLM' as const, // Ensure runtime is updated
+            name: initial.canonicalName, 
             tags: initial.tags, 
-            size: initial.size, 
-            sizeBytes: initial.sizeBytes,
-            description: initial.description,
-            recommendation: initial.recommendation
+            size: (initial.totalBytes / (1024 ** 3)).toFixed(1) + ' GB', 
+            sizeBytes: initial.totalBytes,
+            description: `Model from ${initial.provider} with ${initial.quantization} quantization.`,
+            recommendation: `Recommended for devices with ${initial.recommendedRAM}GB+ RAM.`,
+            provider: initial.provider,
+            quantization: initial.quantization,
+            ramRequirementGB: initial.minRAM,
+            storageRequirementGB: Math.ceil(initial.totalBytes / (1024 ** 3))
           };
         }
-        return { ...m, status };
+        return { ...m, status, runtime: m.runtime || 'WEBLLM' as const };
       });
 
-      // Add any new models from INITIAL_MODELS that aren't in syncedModels
-      const newModels = INITIAL_MODELS.filter(im => 
+      // Add any new models from MODEL_MANIFEST that aren't in syncedModels
+      const newModels = MODEL_MANIFEST.filter(im => 
         !syncedModels.some(sm => 
-          sm.id === im.id || 
-          sm.id === im.id.replace('q4f16_1', 'q4f32_1') ||
-          sm.id === im.id.replace('q4f32_1', 'q4f16_1')
+          sm.id === im.modelId || 
+          sm.id === im.modelId.replace('q4f16_1', 'q4f32_1') ||
+          sm.id === im.modelId.replace('q4f32_1', 'q4f16_1')
         )
-      );
+      ).map(im => ({
+        id: im.modelId,
+        name: im.canonicalName,
+        runtime: 'WEBLLM' as const,
+        size: (im.totalBytes / (1024 ** 3)).toFixed(1) + ' GB',
+        sizeBytes: im.totalBytes,
+        tags: im.tags,
+        status: 'NOT_INSTALLED' as const,
+        description: `Model from ${im.provider} with ${im.quantization} quantization.`,
+        recommendation: `Recommended for devices with ${im.recommendedRAM}GB+ RAM.`,
+        provider: im.provider,
+        quantization: im.quantization,
+        ramRequirementGB: im.minRAM,
+        storageRequirementGB: Math.ceil(im.totalBytes / (1024 ** 3))
+      }));
 
       return [...syncedModels, ...newModels];
     }
@@ -597,7 +328,12 @@ export default function App() {
   
   const [settings, setSettings] = useState<Settings>(() => {
     const saved = localStorage.getItem('vulkan_settings');
-    return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+    try {
+      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+    } catch (e) {
+      console.error("Failed to parse settings:", e);
+      return DEFAULT_SETTINGS;
+    }
   });
   
   const [threads, setThreads] = useState<ChatThread[]>(() => {
@@ -643,14 +379,18 @@ export default function App() {
   const [cachedModels, setCachedModels] = useState<Array<{ id: string, size: number }>>([]);
   const [appError, setAppError] = useState<string | null>(null);
   const [isLoadingTest, setIsLoadingTest] = useState(false);
-  const [gpuFeatures, setGpuFeatures] = useState<{ supported: boolean, hasF16: boolean } | null>(null);
+  const [gpuFeatures, setGpuFeatures] = useState<{ supported: boolean, hasF16: boolean, adapterName?: string } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const initializeApp = async () => {
       // 1. Check GPU Features
       const features = await checkWebGPUFeatures();
-      setGpuFeatures({ supported: features.supported, hasF16: features.hasF16 });
+      setGpuFeatures({ 
+        supported: features.supported, 
+        hasF16: features.hasF16,
+        adapterName: features.adapterName
+      });
       
       if (!features.supported) {
         setAppError("WebGPU is not supported or enabled in this browser. Local inference will be unavailable.");
@@ -700,7 +440,8 @@ export default function App() {
           isCached = await isModelInCache(m.id);
           isDownloaded = inOPFS || isCached;
         } else {
-          isDownloaded = await modelDownloader.isModelDownloaded(m.id);
+          // Fallback for other runtimes if any
+          isDownloaded = await isModelInOPFS(m.id);
         }
         const actualSizeBytes = storageUsage.find(s => s.id === m.id)?.size || 0;
         const status: ModelStatus = isDownloaded ? 'READY' : (m.status === 'READY' ? 'NOT_INSTALLED' : m.status);
@@ -824,34 +565,55 @@ export default function App() {
             });
           } catch (bootErr: any) {
             console.error("[Client] Failed to boot WebLLM model:", bootErr);
-            setThreads(prev => prev.map(t => {
-              if (t.id === activeThreadId) {
-                return {
-                  ...t,
-                  messages: [...t.messages, {
-                    id: assistantMessageId,
-                    role: 'assistant',
-                    content: `Error: Failed to load model. ${bootErr.message}`,
-                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  }]
-                };
-              }
-              return t;
-            }));
-            setStreamingMessage(null);
-            return;
+            
+            // Handle cloud fallback if enabled
+            if (!settings.localOnlyMode && settings.cloudFallbackEnabled) {
+              console.log("[Client] Local boot failed, falling back to cloud...");
+              stream = streamCloudFallbackChat(
+                [...messages, userMessage], 
+                activeModel.name,
+                settings.cloudFallbackEnabled
+              );
+            } else {
+              setThreads(prev => prev.map(t => {
+                if (t.id === activeThreadId) {
+                  return {
+                    ...t,
+                    messages: [...t.messages, {
+                      id: assistantMessageId,
+                      role: 'assistant',
+                      content: `Error: Failed to load model locally. ${bootErr.message}\n\nEnable Cloud Fallback in Settings if you want to use remote inference when local fails.`,
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    }]
+                  };
+                }
+                return t;
+              }));
+              setStreamingMessage(null);
+              return;
+            }
           } finally {
             setIsLoadingModel(false);
           }
         }
-        console.log(`[Client] Using real WebLLM engine for ${activeModel.id}`);
-        stream = streamWebLLMChat([...messages, userMessage]);
+        
+        if (!stream) {
+          console.log(`[Client] Using real WebLLM engine for ${activeModel.id}`);
+          stream = streamWebLLMChat([...messages, userMessage], {
+            temperature: settings.temperature,
+            top_p: settings.topP,
+            repetition_penalty: 1.1
+          });
+        }
       } else {
-        console.log(`[Client] Using Gemini simulation for ${activeModel.id}`);
-        stream = streamChatResponse(
+        if (settings.localOnlyMode) {
+          throw new Error("Local-only mode is active. Cloud-based models are disabled.");
+        }
+        console.log(`[Client] Using Gemini for ${activeModel.id}`);
+        stream = streamCloudFallbackChat(
           [...messages, userMessage], 
           activeModel.name,
-          settings.vulkanAcceleration
+          settings.cloudFallbackEnabled
         );
       }
 
@@ -884,6 +646,53 @@ export default function App() {
   };
 
   // Removed redundant syncWithDB useEffect as it's now part of initializeApp
+
+  useEffect(() => {
+    localStorage.setItem('vulkan_favorites', JSON.stringify(favorites));
+  }, [favorites]);
+
+  const toggleFavorite = (id: string) => {
+    setFavorites(prev => prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]);
+  };
+
+  const renameThread = (id: string, newTitle: string) => {
+    setThreads(prev => prev.map(t => t.id === id ? { ...t, title: newTitle } : t));
+    setEditingThreadId(null);
+  };
+
+  const exportThread = (thread: ChatThread) => {
+    const data = JSON.stringify(thread, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vulkan-chat-${thread.title.replace(/\s+/g, '-').toLowerCase()}-${thread.id.slice(0, 8)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const filteredThreads = threads.filter(t => 
+    t.title.toLowerCase().includes(threadSearch.toLowerCase())
+  );
+
+  const filteredModels = models
+    .filter(m => {
+      const matchesSearch = m.name.toLowerCase().includes(modelSearch.toLowerCase()) || 
+                           m.id.toLowerCase().includes(modelSearch.toLowerCase());
+      const matchesFilter = modelFilter === 'all' || 
+                           (modelFilter === 'installed' && m.status === 'READY') ||
+                           (modelFilter === 'favorite' && favorites.includes(m.id));
+      return matchesSearch && matchesFilter;
+    })
+    .sort((a, b) => {
+      if (modelSort === 'name') return a.name.localeCompare(b.name);
+      if (modelSort === 'size') return (a.sizeBytes || 0) - (b.sizeBytes || 0);
+      if (modelSort === 'status') {
+        const statusOrder = { 'READY': 0, 'DOWNLOADING': 1, 'NOT_INSTALLED': 2, 'VERIFYING': 1, 'INSTALLED': 0, 'SUSPENDED': 0, 'INCOMPATIBLE': 3, 'CORRUPTED': 3 };
+        return (statusOrder[a.status as keyof typeof statusOrder] || 99) - (statusOrder[b.status as keyof typeof statusOrder] || 99);
+      }
+      return 0;
+    });
 
   const startRealDownload = async (id: string) => {
     // Safety check for shader-f16
@@ -931,7 +740,6 @@ export default function App() {
         // Keep using the existing downloader for GGUF (or other runtimes)
         await modelDownloader.downloadModel(
           id, 
-          `/api/download/model/${id}`,
           (progress) => {
             setModels(prev => prev.map(m => m.id === id ? { 
               ...m, 
@@ -1040,6 +848,29 @@ export default function App() {
     }
   };
 
+  const getDeviceReadiness = () => {
+    const ramGB = (navigator as any).deviceMemory || 8;
+    if (!gpuFeatures?.supported) return { score: 0, label: 'Incompatible', color: 'text-red-500', status: 'Incompatible', ramGB };
+    
+    let score = 0;
+    if (gpuFeatures.supported) score += 40;
+    if (gpuFeatures.hasF16) score += 30;
+    
+    if (ramGB >= 16) score += 30;
+    else if (ramGB >= 8) score += 20;
+    else if (ramGB >= 4) score += 10;
+
+    let label = 'Limited';
+    let color = 'text-orange-500';
+    if (score >= 90) { label = 'Elite'; color = 'text-emerald-500'; }
+    else if (score >= 70) { label = 'Optimal'; color = 'text-emerald-400'; }
+    else if (score >= 50) { label = 'Capable'; color = 'text-yellow-500'; }
+
+    return { score, label, color, status: label, ramGB };
+  };
+
+  const readiness = getDeviceReadiness();
+
   const updateThreadModel = (modelId: string) => {
     setIsLoadingModel(true);
     setThreads(prev => prev.map(t => t.id === activeThreadId ? { ...t, modelId } : t));
@@ -1048,7 +879,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[#050505] text-[#E0E0E0] font-mono overflow-hidden selection:bg-emerald-500/30">
+    <div className="flex h-screen bg-[#050505] text-[#E0E0E0] font-sans overflow-hidden selection:bg-emerald-500/30">
       <AnimatePresence>
         {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
       </AnimatePresence>
@@ -1116,33 +947,105 @@ export default function App() {
           />
 
           <div className="pt-6">
-            <div className="text-[10px] text-white/30 uppercase font-bold tracking-widest px-4 mb-2 flex items-center gap-2">
-              <History className="w-3 h-3" />
-              Recent Chats
-            </div>
-            {threads.length === 0 ? (
-              <div className="px-4 py-3 text-xs text-white/20 italic">No recent chats</div>
-            ) : (
-              threads.map(thread => (
-                <button
-                  key={thread.id}
-                  onClick={() => { setActiveThreadId(thread.id); setView('chat'); setIsSidebarOpen(false); }}
-                  className={cn(
-                    "w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl transition-all group",
-                    activeThreadId === thread.id && view === 'chat'
-                      ? "bg-white/10 text-white"
-                      : "text-white/40 hover:text-white hover:bg-white/5"
-                  )}
+            <div className="text-[10px] text-white/30 uppercase font-bold tracking-widest px-4 mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <History className="w-3 h-3" />
+                Recent Chats
+              </div>
+              {threads.length > 0 && (
+                <button 
+                  onClick={() => {
+                    if (confirm('Are you sure you want to delete ALL chat history? This cannot be undone.')) {
+                      setThreads([]);
+                      setActiveThreadId(null);
+                    }
+                  }}
+                  className="text-[9px] hover:text-red-500 transition-colors"
                 >
-                  <div className="flex items-center gap-3 truncate">
-                    <MessageSquare className="w-4 h-4 shrink-0" />
-                    <span className="text-sm truncate">{thread.title}</span>
-                  </div>
-                  <Trash2 
-                    onClick={(e) => deleteThread(thread.id, e)}
-                    className="w-4 h-4 text-white/0 group-hover:text-white/20 hover:!text-red-500 transition-all shrink-0" 
-                  />
+                  Clear All
                 </button>
+              )}
+            </div>
+
+            <div className="px-3 mb-3">
+              <div className="relative">
+                <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-white/20" />
+                <input 
+                  type="text"
+                  value={threadSearch}
+                  onChange={(e) => setThreadSearch(e.target.value)}
+                  placeholder="Search chats..."
+                  className="w-full bg-white/5 border border-white/10 rounded-lg pl-7 pr-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-emerald-500/30"
+                />
+              </div>
+            </div>
+
+            {filteredThreads.length === 0 ? (
+              <div className="px-4 py-3 text-xs text-white/20 italic">No matching chats</div>
+            ) : (
+              filteredThreads.map(thread => (
+                <div key={thread.id} className="group relative">
+                  {editingThreadId === thread.id ? (
+                    <div className="px-3 py-1">
+                      <input 
+                        autoFocus
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        onBlur={() => renameThread(thread.id, editTitle)}
+                        onKeyDown={(e) => e.key === 'Enter' && renameThread(thread.id, editTitle)}
+                        className="w-full bg-emerald-500/10 border border-emerald-500/30 rounded px-2 py-1 text-xs text-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <button
+                        onClick={() => { setActiveThreadId(thread.id); setView('chat'); setIsSidebarOpen(false); }}
+                        className={cn(
+                          "w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl transition-all",
+                          activeThreadId === thread.id && view === 'chat'
+                            ? "bg-white/10 text-white"
+                            : "text-white/40 hover:text-white hover:bg-white/5"
+                        )}
+                      >
+                        <div className="flex items-center gap-3 truncate">
+                          <MessageSquare className="w-4 h-4 shrink-0" />
+                          <span className="text-sm truncate">{thread.title}</span>
+                        </div>
+                      </button>
+                      
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-l from-[#0a0a0a] via-[#0a0a0a] to-transparent pl-4">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingThreadId(thread.id);
+                            setEditTitle(thread.title);
+                          }}
+                          className="p-1 hover:text-emerald-500 transition-colors"
+                          title="Rename"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            exportThread(thread);
+                          }}
+                          className="p-1 hover:text-blue-500 transition-colors"
+                          title="Export JSON"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
+                        <button 
+                          onClick={(e) => deleteThread(thread.id, e)}
+                          className="p-1 hover:text-red-500 transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               ))
             )}
           </div>
@@ -1181,44 +1084,61 @@ export default function App() {
         )}
         {/* Header */}
         <header className="h-16 border-b border-emerald-500/10 flex items-center justify-between px-4 lg:px-8 bg-[#050505]/80 backdrop-blur-md sticky top-0 z-30">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
             <button 
               onClick={() => setIsSidebarOpen(true)}
-              className="p-2 hover:bg-emerald-500/10 rounded-lg lg:hidden"
+              className="p-2 hover:bg-emerald-500/10 rounded-lg lg:hidden shrink-0"
             >
               <Menu className="w-6 h-6 text-emerald-500/60" />
             </button>
-            <h1 className="text-xs font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow">{view}</h1>
+            <h1 className="text-xs font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow hidden sm:block shrink-0">{view}</h1>
             
             {view === 'chat' && activeThreadId && (
-              <div className="relative ml-2 flex items-center gap-3">
-                <div className="relative">
-                  <select 
-                    value={activeThread?.modelId}
-                    onChange={(e) => updateThreadModel(e.target.value)}
-                    className="appearance-none bg-black border border-emerald-500/20 rounded-lg px-4 py-1.5 pr-10 text-[10px] font-bold uppercase tracking-widest text-emerald-500 focus:outline-none focus:border-emerald-500/50 cursor-pointer"
-                  >
-                    {models.filter(m => m.status === 'READY').map(model => (
-                      <option key={model.id} value={model.id}>{model.name}</option>
-                    ))}
-                  </select>
-                  <ChevronDown className="w-3 h-3 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-500/40" />
+              <div className="flex items-center gap-2 sm:gap-4 ml-0 sm:ml-2 overflow-hidden min-w-0">
+                <div className="relative flex items-center gap-2 sm:gap-3 min-w-0">
+                  <div className="relative min-w-0">
+                    <select 
+                      value={activeThread?.modelId}
+                      onChange={(e) => updateThreadModel(e.target.value)}
+                      className="appearance-none bg-black border border-emerald-500/20 rounded-lg px-2 sm:px-4 py-1.5 pr-8 sm:pr-10 text-[9px] sm:text-[10px] font-bold uppercase tracking-widest text-emerald-500 focus:outline-none focus:border-emerald-500/50 cursor-pointer truncate max-w-[120px] sm:max-w-[200px]"
+                    >
+                      {models.filter(m => m.status === 'READY').map(model => (
+                        <option key={model.id} value={model.id}>{model.name}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="w-3 h-3 absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-500/40" />
+                  </div>
+                  {isLoadingModel && (
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="flex items-center gap-1 sm:gap-2 text-[8px] sm:text-[9px] text-emerald-500 font-bold uppercase tracking-widest whitespace-nowrap"
+                    >
+                      <Loader2 className="w-2.5 h-2.5 sm:w-3 sm:h-3 animate-spin" />
+                      <span className="hidden xs:inline">Syncing...</span>
+                    </motion.div>
+                  )}
                 </div>
-                {isLoadingModel && (
-                  <motion.div 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="flex items-center gap-2 text-[9px] text-emerald-500 font-bold uppercase tracking-widest"
-                  >
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    Syncing Weights...
-                  </motion.div>
-                )}
+
+                {/* Runtime Badge */}
+                <div className={cn(
+                  "px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[8px] sm:text-[9px] font-bold uppercase tracking-widest border whitespace-nowrap shrink-0",
+                  activeModel?.runtime === 'WEBLLM' && !isLoadingModel && getEngine()
+                    ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-500"
+                    : "bg-yellow-500/10 border-yellow-500/40 text-yellow-500"
+                )}>
+                  <span className="hidden sm:inline">
+                    {activeModel?.runtime === 'WEBLLM' && !isLoadingModel && getEngine() ? 'LOCAL RUNTIME' : 'CLOUD FALLBACK'}
+                  </span>
+                  <span className="sm:hidden">
+                    {activeModel?.runtime === 'WEBLLM' && !isLoadingModel && getEngine() ? 'LOCAL' : 'CLOUD'}
+                  </span>
+                </div>
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             <div className="w-8 h-8 rounded bg-emerald-500/5 flex items-center justify-center border border-emerald-500/20 terminal-glow">
               <Shield className="w-4 h-4 text-emerald-500" />
             </div>
@@ -1371,7 +1291,7 @@ export default function App() {
                 exit={{ opacity: 0, x: -20 }}
                 className="p-6 lg:p-10 max-w-5xl mx-auto w-full space-y-8"
               >
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                   <div>
                     <h2 className="text-2xl font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow">Model Registry</h2>
                     <p className="text-emerald-500/40 mt-1 text-xs font-mono uppercase tracking-widest">Manage on-device LLM runtimes and weights.</p>
@@ -1387,19 +1307,86 @@ export default function App() {
                   </div>
                 </div>
 
-        <div className="grid gap-4">
-          {models.map((model) => (
+                {/* Device Readiness Card */}
+                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-6 flex flex-col md:flex-row items-center gap-6">
+                  <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                    <Cpu className={cn("w-8 h-8", readiness.score > 70 ? "text-emerald-500" : "text-yellow-500")} />
+                  </div>
+                  <div className="flex-1 text-center md:text-left">
+                    <div className="flex flex-col md:flex-row md:items-center gap-2 mb-1">
+                      <h3 className="text-lg font-bold text-emerald-500 uppercase tracking-wider">Device Readiness: {readiness.status}</h3>
+                      <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-500 rounded text-[10px] font-bold uppercase tracking-widest">Score: {readiness.score}/100</span>
+                    </div>
+                    <p className="text-sm text-emerald-500/60 font-mono">
+                      {readiness.score > 80 
+                        ? "Optimal hardware detected. High-performance local inference enabled." 
+                        : readiness.score > 50 
+                          ? "Standard hardware detected. Balanced performance expected." 
+                          : "Limited hardware detected. Consider smaller models for better stability."}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 w-full md:w-auto">
+                    <div className="bg-black/40 border border-emerald-500/10 rounded-lg p-3 text-center">
+                      <div className="text-xs font-bold text-emerald-500">{readiness.ramGB}GB</div>
+                      <div className="text-[9px] text-emerald-500/40 uppercase font-bold">System RAM</div>
+                    </div>
+                    <div className="bg-black/40 border border-emerald-500/10 rounded-lg p-3 text-center">
+                      <div className="text-xs font-bold text-emerald-500">{gpuFeatures?.hasF16 ? 'FP16' : 'FP32'}</div>
+                      <div className="text-[9px] text-emerald-500/40 uppercase font-bold">GPU Precision</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filters & Search */}
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500/40" />
+                    <input 
+                      type="text"
+                      value={modelSearch}
+                      onChange={(e) => setModelSearch(e.target.value)}
+                      placeholder="Search models..."
+                      className="w-full bg-black border border-emerald-500/20 rounded-lg pl-10 pr-4 py-2 text-sm text-emerald-500 focus:outline-none focus:border-emerald-500/50"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <select 
+                      value={modelFilter}
+                      onChange={(e) => setModelFilter(e.target.value as any)}
+                      className="bg-black border border-emerald-500/20 rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-500 focus:outline-none"
+                    >
+                      <option value="all">All Models</option>
+                      <option value="installed">Installed</option>
+                      <option value="favorite">Favorites</option>
+                    </select>
+                    <select 
+                      value={modelSort}
+                      onChange={(e) => setModelSort(e.target.value as any)}
+                      className="bg-black border border-emerald-500/20 rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-500 focus:outline-none"
+                    >
+                      <option value="name">Sort by Name</option>
+                      <option value="size">Sort by Size</option>
+                      <option value="status">Sort by Status</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid gap-4">
+                  {filteredModels.map((model) => (
             <div 
               key={model.id}
               className="bg-[#080808] border border-emerald-500/10 rounded-lg p-5 flex flex-col gap-6 group hover:border-emerald-500/30 transition-all"
             >
               <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
-                <div className={cn(
-                  "w-12 h-12 sm:w-14 sm:h-14 rounded flex items-center justify-center shrink-0 border",
-                  model.status === 'READY' ? "bg-emerald-500/5 border-emerald-500/40" : "bg-black border-emerald-500/10"
-                )}>
-                  <Database className={cn("w-6 h-6 sm:w-7 sm:h-7", model.status === 'READY' ? "text-emerald-500" : "text-emerald-500/20")} />
-                </div>
+                <button 
+                  onClick={() => toggleFavorite(model.id)}
+                  className={cn(
+                    "w-12 h-12 sm:w-14 sm:h-14 rounded flex items-center justify-center shrink-0 border transition-all",
+                    favorites.includes(model.id) ? "bg-yellow-500/10 border-yellow-500/40 text-yellow-500" : "bg-black border-emerald-500/10 text-emerald-500/20 hover:border-emerald-500/40"
+                  )}
+                >
+                  <Star className={cn("w-6 h-6 sm:w-7 sm:h-7", favorites.includes(model.id) ? "fill-yellow-500" : "")} />
+                </button>
                 
                 <div className="flex-1 min-w-0">
                   <div className="flex flex-wrap items-center gap-3 mb-1">
@@ -1426,18 +1413,19 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-2 py-0.5 bg-emerald-500/5 border border-emerald-500/10 rounded text-[9px] font-bold text-emerald-500/60 uppercase tracking-widest">{model.runtime}</span>
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <span className="px-2 py-0.5 bg-emerald-500/5 border border-emerald-500/10 rounded text-[9px] font-bold text-emerald-500/60 uppercase tracking-widest">{model.provider || 'Local'}</span>
+                    <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-[9px] font-bold text-white/40 uppercase tracking-widest">{model.format || 'MLC'} • {model.quantization || 'q4f16_1'}</span>
                     <span className="text-[10px] text-emerald-500/40 font-mono uppercase">
                       {model.status === 'READY' && model.actualSizeBytes 
                         ? `${(model.actualSizeBytes / (1024 ** 3)).toFixed(2)} GB on disk` 
                         : (model.status === 'READY' ? 'Ready' : model.size)}
                     </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {model.tags.map(tag => (
-                        <span key={tag} className="text-[9px] text-emerald-500/20 uppercase font-bold tracking-[0.1em]">{tag}</span>
-                      ))}
-                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {model.tags.map(tag => (
+                      <span key={tag} className="text-[9px] text-emerald-500/20 uppercase font-bold tracking-[0.1em]">{tag}</span>
+                    ))}
                   </div>
                 </div>
 
@@ -1548,6 +1536,42 @@ export default function App() {
                 <div className="space-y-8">
                   <section className="space-y-4">
                     <h3 className="text-[10px] font-bold text-emerald-500/40 uppercase tracking-[0.2em] flex items-center gap-2 border-b border-emerald-500/10 pb-2">
+                      <Shield className="w-3 h-3" />
+                      Privacy & Connectivity
+                    </h3>
+                    <div className="grid gap-3">
+                      <SettingsCard 
+                        title="Local-Only Mode"
+                        description="Disable all cloud-based fallbacks and external API calls."
+                      >
+                        <Toggle 
+                          active={settings.localOnlyMode} 
+                          onToggle={() => setSettings(prev => ({ ...prev, localOnlyMode: !prev.localOnlyMode }))} 
+                        />
+                      </SettingsCard>
+
+                      <SettingsCard 
+                        title="Cloud Fallback"
+                        description="Use remote Gemini API if local inference fails or is unavailable."
+                      >
+                        <Toggle 
+                          active={settings.cloudFallbackEnabled} 
+                          onToggle={() => {
+                            if (!settings.cloudFallbackEnabled && !settings.cloudFallbackAccepted) {
+                              if (window.confirm("PRIVACY WARNING: Enabling Cloud Fallback will send your chat messages to Google's Gemini API when local models fail. Your data will no longer be strictly on-device. Do you accept?")) {
+                                setSettings(prev => ({ ...prev, cloudFallbackEnabled: true, cloudFallbackAccepted: true }));
+                              }
+                            } else {
+                              setSettings(prev => ({ ...prev, cloudFallbackEnabled: !prev.cloudFallbackEnabled }));
+                            }
+                          }} 
+                        />
+                      </SettingsCard>
+                    </div>
+                  </section>
+
+                  <section className="space-y-4">
+                    <h3 className="text-[10px] font-bold text-emerald-500/40 uppercase tracking-[0.2em] flex items-center gap-2 border-b border-emerald-500/10 pb-2">
                       <Cpu className="w-3 h-3" />
                       Performance & Inference
                     </h3>
@@ -1585,6 +1609,67 @@ export default function App() {
                             <option>Balanced</option>
                             <option>High Performance</option>
                             <option>Power Saver</option>
+                          </select>
+                          <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-500/40" />
+                        </div>
+                      </SettingsCard>
+
+                      <SettingsCard 
+                        title="Streaming Speed"
+                        description="Control how fast tokens are displayed."
+                      >
+                        <div className="relative">
+                          <select 
+                            value={settings.streamingSpeed}
+                            onChange={(e) => setSettings(prev => ({ ...prev, streamingSpeed: e.target.value as any }))}
+                            className="appearance-none bg-black border border-emerald-500/20 rounded-md px-4 py-2 pr-10 text-[10px] font-bold uppercase tracking-widest text-emerald-500 focus:outline-none focus:border-emerald-500/50 cursor-pointer w-40"
+                          >
+                            <option>Normal</option>
+                            <option>Fast</option>
+                            <option>Instant</option>
+                          </select>
+                          <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-500/40" />
+                        </div>
+                      </SettingsCard>
+                    </div>
+                  </section>
+
+                  <section className="space-y-4">
+                    <h3 className="text-[10px] font-bold text-emerald-500/40 uppercase tracking-[0.2em] flex items-center gap-2 border-b border-emerald-500/10 pb-2">
+                      <Cpu className="w-3 h-3" />
+                      Inference Parameters
+                    </h3>
+                    <div className="grid gap-3">
+                      <SettingsCard 
+                        title="Temperature"
+                        description="Controls randomness: Lower is more focused, higher is more creative."
+                      >
+                        <div className="flex items-center gap-4">
+                          <input 
+                            type="range" 
+                            min="0" max="2" step="0.1" 
+                            value={settings.temperature}
+                            onChange={(e) => setSettings(prev => ({ ...prev, temperature: parseFloat(e.target.value) }))}
+                            className="w-32 accent-emerald-500"
+                          />
+                          <span className="text-xs font-bold text-emerald-500 w-8">{settings.temperature.toFixed(1)}</span>
+                        </div>
+                      </SettingsCard>
+
+                      <SettingsCard 
+                        title="Context Length"
+                        description="Maximum number of tokens the model can process."
+                      >
+                        <div className="relative">
+                          <select 
+                            value={settings.contextLength}
+                            onChange={(e) => setSettings(prev => ({ ...prev, contextLength: parseInt(e.target.value) }))}
+                            className="appearance-none bg-black border border-emerald-500/20 rounded-md px-4 py-2 pr-10 text-[10px] font-bold uppercase tracking-widest text-emerald-500 focus:outline-none focus:border-emerald-500/50 cursor-pointer w-40"
+                          >
+                            <option value="1024">1024</option>
+                            <option value="2048">2048</option>
+                            <option value="4096">4096</option>
+                            <option value="8192">8192</option>
                           </select>
                           <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-emerald-500/40" />
                         </div>
@@ -1636,6 +1721,42 @@ export default function App() {
                       Hardware Compatibility
                     </h3>
                     <div className="grid gap-3">
+                      {/* Device Readiness Card */}
+                      <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-5 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 p-4 opacity-10">
+                          <VulkanLogo className="w-20 h-20" />
+                        </div>
+                        <div className="relative z-10">
+                          <div className="flex items-center justify-between mb-4">
+                            <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-[0.2em]">Device Readiness</div>
+                            <div className={cn("text-lg font-black uppercase tracking-tighter italic", readiness.color)}>
+                              {readiness.label}
+                            </div>
+                          </div>
+                          <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden mb-4">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${readiness.score}%` }}
+                              className={cn("h-full transition-all duration-1000", readiness.color.replace('text', 'bg'))}
+                            />
+                          </div>
+                          <div className="grid grid-cols-3 gap-4">
+                            <div>
+                              <div className="text-[9px] text-white/30 uppercase font-bold tracking-wider mb-1">WebGPU</div>
+                              <div className="text-xs font-bold">{gpuFeatures?.supported ? 'ACTIVE' : 'NONE'}</div>
+                            </div>
+                            <div>
+                              <div className="text-[9px] text-white/30 uppercase font-bold tracking-wider mb-1">F16 Support</div>
+                              <div className="text-xs font-bold">{gpuFeatures?.hasF16 ? 'YES' : 'NO'}</div>
+                            </div>
+                            <div>
+                              <div className="text-[9px] text-white/30 uppercase font-bold tracking-wider mb-1">Est. RAM</div>
+                              <div className="text-xs font-bold">{(navigator as any).deviceMemory || '8+'} GB</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                       <div className="bg-[#111111] border border-white/5 rounded-2xl p-5">
                         <div className="flex items-center justify-between mb-2">
                           <div className="font-bold">WebGPU Support</div>
@@ -1765,7 +1886,35 @@ export default function App() {
                   </section>
                 </div>
 
-                <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-2xl p-6 flex gap-4">
+                  <section className="space-y-4">
+                    <h3 className="text-sm font-bold text-white/40 uppercase tracking-widest flex items-center gap-2">
+                      <Shield className="w-4 h-4" />
+                      Advanced Privacy & Diagnostics
+                    </h3>
+                    <div className="grid gap-3">
+                      <SettingsCard 
+                        title="Diagnostics Mode"
+                        description="Enable detailed logging and performance metrics."
+                      >
+                        <Toggle 
+                          active={settings.diagnosticsEnabled} 
+                          onToggle={() => setSettings(prev => ({ ...prev, diagnosticsEnabled: !prev.diagnosticsEnabled }))} 
+                        />
+                      </SettingsCard>
+
+                      <SettingsCard 
+                        title="Privacy Mode"
+                        description="Hide message content in the sidebar and notifications."
+                      >
+                        <Toggle 
+                          active={settings.privacyMode} 
+                          onToggle={() => setSettings(prev => ({ ...prev, privacyMode: !prev.privacyMode }))} 
+                        />
+                      </SettingsCard>
+                    </div>
+                  </section>
+
+                  <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-2xl p-6 flex gap-4">
                   <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center shrink-0">
                     <Shield className="w-5 h-5 text-emerald-500" />
                   </div>
@@ -1776,7 +1925,77 @@ export default function App() {
                     </p>
                   </div>
                 </div>
-              </motion.div>
+
+                <section className="space-y-4">
+                  <h3 className="text-sm font-bold text-white/40 uppercase tracking-widest flex items-center gap-2">
+                    <Cpu className="w-4 h-4" />
+                    Hardware Diagnostics
+                  </h3>
+                  <div className="bg-black/40 border border-emerald-500/10 rounded-xl p-6 space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-emerald-500/40 uppercase font-bold tracking-widest">GPU Adapter</div>
+                        <div className="text-sm font-mono text-emerald-500">{gpuFeatures?.adapterName || 'Detecting...'}</div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-emerald-500/40 uppercase font-bold tracking-widest">VRAM Estimation</div>
+                        <div className="text-sm font-mono text-emerald-500">~{(readiness.ramGB * 0.7).toFixed(1)} GB Available</div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-emerald-500/40 uppercase font-bold tracking-widest">WebGPU Support</div>
+                        <div className="flex items-center gap-2">
+                          <div className={cn("w-2 h-2 rounded-full", gpuFeatures ? "bg-emerald-500" : "bg-red-500")} />
+                          <span className="text-sm font-mono text-emerald-500">{gpuFeatures ? 'Active' : 'Not Supported'}</span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-emerald-500/40 uppercase font-bold tracking-widest">FP16 Support</div>
+                        <div className="flex items-center gap-2">
+                          <div className={cn("w-2 h-2 rounded-full", gpuFeatures?.hasF16 ? "bg-emerald-500" : "bg-yellow-500")} />
+                          <span className="text-sm font-mono text-emerald-500">{gpuFeatures?.hasF16 ? 'Enabled' : 'Disabled (FP32 Fallback)'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="pt-4 border-t border-emerald-500/10">
+                      <button 
+                        onClick={() => {
+                          const report = {
+                            timestamp: new Date().toISOString(),
+                            readiness,
+                            gpuFeatures,
+                            settings,
+                            storage: storageInfo
+                          };
+                          const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `vulkan-diagnostics-${Date.now()}.json`;
+                          a.click();
+                        }}
+                        className="w-full py-3 bg-emerald-500/5 border border-emerald-500/20 rounded-lg text-xs font-bold uppercase tracking-widest text-emerald-500 hover:bg-emerald-500/10 transition-all"
+                      >
+                        Generate System Diagnostics Report
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <div className="pt-6 border-t border-emerald-500/10">
+                  <button 
+                    onClick={() => {
+                      if (confirm('Are you sure you want to purge all local models and chat history? This cannot be undone.')) {
+                        localStorage.clear();
+                        window.location.reload();
+                      }
+                    }}
+                    className="w-full py-4 bg-red-500/5 border border-red-500/20 rounded-xl text-xs font-bold uppercase tracking-widest text-red-500 hover:bg-red-500/10 transition-all"
+                  >
+                    Purge All Local Data & Reset Kernel
+                  </button>
+                </div>
+            </motion.div>
             )}
           </AnimatePresence>
         </div>
@@ -1811,7 +2030,7 @@ function SettingsCard({ title, description, children, icon }: { title: string, d
             {icon && <span className="text-emerald-500/60 group-hover:text-emerald-500 transition-colors">{icon}</span>}
             <h4 className="font-bold text-emerald-500/90 tracking-wide uppercase text-xs">{title}</h4>
           </div>
-          <p className="text-[10px] text-emerald-500/40 leading-relaxed font-mono">{description}</p>
+          <p className="text-[10px] text-emerald-500/40 leading-relaxed">{description}</p>
         </div>
         {children}
       </div>

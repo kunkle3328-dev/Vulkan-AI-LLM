@@ -9,11 +9,11 @@
 
 @layer base {
   body {
-    @apply bg-[#050505] text-[#E0E0E0] font-mono selection:bg-emerald-500/30;
+    @apply bg-[#050505] text-[#E0E0E0] font-sans selection:bg-emerald-500/30;
   }
 
   h1, h2, h3, h4, h5, h6 {
-    @apply font-mono font-bold tracking-tight;
+    @apply font-sans font-bold tracking-tight;
   }
 }
 
