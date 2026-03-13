@@ -84,6 +84,7 @@ export interface Model {
   sizeBytes: number;
   tags: string[];
   status: ModelStatus;
+  statusText?: string;
   progress?: number;
   downloadSpeed?: string;
   eta?: string;

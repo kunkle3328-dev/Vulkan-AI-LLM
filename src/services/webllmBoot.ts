@@ -69,12 +69,16 @@ export async function boot({ modelId, onProgress }: BootOptions): Promise<webllm
       }
 
       onProgress("initializing_engine", 0.2, "Initializing WebLLM engine...");
+      console.log(`[Boot] Starting CreateMLCEngine for ${modelId}`);
 
       const engine = await webllm.CreateMLCEngine(modelId, {
         initProgressCallback: (report) => {
+          console.log(`[WebLLM Init] ${report.text} (${(report.progress * 100).toFixed(1)}%)`);
           onProgress("downloading_model", 0.2 + report.progress * 0.8, report.text);
         },
       });
+
+      console.log(`[Boot] CreateMLCEngine finished for ${modelId}`);
 
       const endTime = performance.now();
       console.log(`[Boot] ${modelId} boot time: ${((endTime - startTime) / 1000).toFixed(2)}s`);

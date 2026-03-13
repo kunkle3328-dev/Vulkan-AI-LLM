@@ -122,7 +122,7 @@ const MessageItem = memo(({ message, isLast }: { message: Message, isLast: boole
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className={cn(
-        "group flex flex-col gap-3 max-w-full",
+        "group flex flex-col gap-2 sm:gap-3 max-w-full",
         message.role === 'user' ? "items-end" : "items-start"
       )}
     >
@@ -131,16 +131,16 @@ const MessageItem = memo(({ message, isLast }: { message: Message, isLast: boole
         message.role === 'user' ? "flex-row-reverse" : "flex-row"
       )}>
         <div className={cn(
-          "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold",
+          "w-5 h-5 sm:w-6 sm:h-6 rounded-full flex items-center justify-center text-[9px] sm:text-[10px] font-bold",
           message.role === 'user' ? "bg-emerald-500/20 text-emerald-500" : "bg-white/10 text-white/60"
         )}>
           {message.role === 'user' ? 'U' : 'AI'}
         </div>
-        <span className="text-[10px] text-white/20 font-medium">{message.timestamp}</span>
+        <span className="text-[9px] sm:text-[10px] text-white/20 font-medium">{message.timestamp}</span>
       </div>
       
       <div className={cn(
-        "relative p-4 rounded-2xl text-[15px] leading-relaxed transition-all",
+        "relative p-3 sm:p-4 rounded-2xl text-sm sm:text-[15px] leading-relaxed transition-all",
         message.role === 'user' 
           ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-50" 
           : "bg-white/5 border border-white/10 text-white/90"
@@ -255,11 +255,13 @@ function AppContent() {
       
       // ID Migration Map
       const idMigration: Record<string, string> = {
-        'mistral-7b-v0.3': 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC',
-        'gemma-2b-it': 'gemma-2b-it-q4f16_1-MLC',
-        'phi-3-mini': 'Phi-3-mini-4k-instruct-q4f16_1-MLC',
-        'llama-3-8b': 'Llama-3-8B-Instruct-q4f16_1-MLC',
-        'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f16_1-MLC'
+        'mistral-7b-v0.3': 'Mistral-7B-Instruct-v0.3-q4f32_1-MLC',
+        'gemma-2b-it': 'gemma-2b-it-q4f32_1-MLC',
+        'phi-3-mini': 'Phi-3-mini-4k-instruct-q4f32_1-MLC',
+        'llama-3-8b': 'Llama-3-8B-Instruct-q4f32_1-MLC',
+        'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f32_1-MLC',
+        'Llama-3-8B-Instruct-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f32_1-MLC',
+        'Llama-3.1-8B-Instruct-q4f16_1-MLC': 'Llama-3.1-8B-Instruct-q4f32_1-MLC'
       };
 
       // Apply migration
@@ -346,7 +348,8 @@ function AppContent() {
       'gemma-2b-it': 'gemma-2b-it-q4f16_1-MLC',
       'phi-3-mini': 'Phi-3-mini-4k-instruct-q4f16_1-MLC',
       'llama-3-8b': 'Llama-3-8B-Instruct-q4f16_1-MLC',
-      'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f16_1-MLC'
+      'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f16_1-MLC',
+      'Llama-3-8B-Instruct-q4f32_1': 'Llama-3-8B-Instruct-q4f32_1-MLC'
     };
 
     // Apply migration to threads
@@ -448,6 +451,7 @@ function AppContent() {
         return { ...m, status, actualSizeBytes, isCached };
       }));
       
+      console.log("[App] Initial models synced:", finalModels);
       setModels(finalModels);
 
       // Update threads to match fallback IDs
@@ -465,7 +469,11 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('vulkan_models', JSON.stringify(models));
+    try {
+      localStorage.setItem('vulkan_models', JSON.stringify(models));
+    } catch (e) {
+      console.error("Failed to save models to localStorage:", e);
+    }
   }, [models]);
 
   useEffect(() => {
@@ -492,8 +500,12 @@ function AppContent() {
   const messages = activeThread?.messages || [];
   const activeModel = models.find(m => m.id === activeThread?.modelId);
 
+  useEffect(() => {
+    console.log(`[App] View changed to: ${view}, Active Thread: ${activeThreadId}`);
+  }, [view, activeThreadId]);
+
   const createNewThread = () => {
-    const defaultModelId = models.find(m => m.status === 'READY')?.id || models[0]?.id || 'Llama-3.2-3B-Instruct-q4f16_1-MLC';
+    const defaultModelId = models.find(m => m.status === 'READY')?.id || models[0]?.id || 'Llama-3.2-1B-Instruct-q4f32_1-MLC';
     const newThread: ChatThread = {
       id: Date.now().toString(),
       title: 'New Conversation',
@@ -719,20 +731,25 @@ function AppContent() {
       }
     }
 
-    setModels(prev => prev.map(m => m.id === id ? { ...m, status: 'DOWNLOADING', progress: 0 } : m));
-
+    setModels(prev => {
+      if (!Array.isArray(prev)) return [];
+      return prev.map(m => m.id === id ? { ...m, status: 'DOWNLOADING', progress: 0, statusText: 'Initializing...' } : m);
+    });
+    
     try {
+      console.log(`[App] Starting download for ${id}`);
       if (model.runtime === 'WEBLLM') {
         // Use the new OPFS-aware bootstrapper for WebLLM
         await boot({
           modelId: id,
-          onProgress: (text, progress) => {
-            const isCacheLoad = text.toLowerCase().includes('cache') || text.toLowerCase().includes('loading');
+          onProgress: (phase, progress, message) => {
+            const isCacheLoad = phase === 'initializing_engine' || (message && (message.toLowerCase().includes('cache') || message.toLowerCase().includes('loading')));
             setModels(prev => prev.map(m => m.id === id ? { 
               ...m, 
               progress: progress !== undefined ? progress * 100 : undefined,
-              downloadSpeed: isCacheLoad ? 'Loading from Cache' : (text.includes('MB/s') ? text.split(' ').slice(-2).join(' ') : undefined),
-              eta: isCacheLoad ? 'Fast' : (text.includes('ETA') ? text.split('ETA: ')[1] : undefined)
+              downloadSpeed: isCacheLoad ? 'Initializing Kernel' : (message && message.includes('MB/s') ? message.split(' ').slice(-2).join(' ') : undefined),
+              eta: isCacheLoad ? 'Fast' : (message && message.includes('ETA') ? message.split('ETA: ')[1] : undefined),
+              statusText: message || phase
             } : m));
           }
         });
@@ -750,6 +767,9 @@ function AppContent() {
           }
         );
       }
+
+      const engine = getEngine();
+      console.log(`[App] Download/Boot finished for ${id}. Engine ready: ${!!engine}`);
 
       setModels(prev => prev.map(m => m.id === id ? { 
         ...m, 
@@ -892,7 +912,7 @@ function AppContent() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setIsSidebarOpen(false)}
-            className="fixed inset-0 bg-black/60 z-40 lg:hidden"
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 lg:hidden"
           />
         )}
       </AnimatePresence>
@@ -900,9 +920,10 @@ function AppContent() {
       {/* Sidebar */}
       <motion.aside 
         initial={false}
-        animate={{ x: isSidebarOpen ? 0 : -280 }}
+        animate={{ x: isSidebarOpen ? 0 : -320 }}
         className={cn(
-          "fixed lg:relative inset-y-0 left-0 w-[280px] bg-[#080808] border-r border-emerald-500/10 z-50 transition-transform lg:translate-x-0 flex flex-col"
+          "fixed lg:relative inset-y-0 left-0 w-[280px] sm:w-[320px] bg-[#080808] border-r border-emerald-500/10 z-50 transition-transform lg:translate-x-0 flex flex-col",
+          !isSidebarOpen && "pointer-events-none lg:pointer-events-auto"
         )}
       >
         <div className="p-6 flex items-center justify-between">
@@ -1083,24 +1104,24 @@ function AppContent() {
           </div>
         )}
         {/* Header */}
-        <header className="h-16 border-b border-emerald-500/10 flex items-center justify-between px-4 lg:px-8 bg-[#050505]/80 backdrop-blur-md sticky top-0 z-30">
+        <header className="h-14 sm:h-16 border-b border-emerald-500/10 flex items-center justify-between px-3 sm:px-4 lg:px-8 bg-[#050505]/80 backdrop-blur-md sticky top-0 z-30">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
             <button 
               onClick={() => setIsSidebarOpen(true)}
-              className="p-2 hover:bg-emerald-500/10 rounded-lg lg:hidden shrink-0"
+              className="p-1.5 sm:p-2 hover:bg-emerald-500/10 rounded-lg lg:hidden shrink-0"
             >
-              <Menu className="w-6 h-6 text-emerald-500/60" />
+              <Menu className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-500/60" />
             </button>
-            <h1 className="text-xs font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow hidden sm:block shrink-0">{view}</h1>
+            <h1 className="text-[10px] sm:text-xs font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow hidden xs:block shrink-0">{view}</h1>
             
             {view === 'chat' && activeThreadId && (
               <div className="flex items-center gap-2 sm:gap-4 ml-0 sm:ml-2 overflow-hidden min-w-0">
-                <div className="relative flex items-center gap-2 sm:gap-3 min-w-0">
+                <div className="relative flex items-center gap-1.5 sm:gap-3 min-w-0">
                   <div className="relative min-w-0">
                     <select 
                       value={activeThread?.modelId}
                       onChange={(e) => updateThreadModel(e.target.value)}
-                      className="appearance-none bg-black border border-emerald-500/20 rounded-lg px-2 sm:px-4 py-1.5 pr-8 sm:pr-10 text-[9px] sm:text-[10px] font-bold uppercase tracking-widest text-emerald-500 focus:outline-none focus:border-emerald-500/50 cursor-pointer truncate max-w-[120px] sm:max-w-[200px]"
+                      className="appearance-none bg-black border border-emerald-500/20 rounded-lg px-2 sm:px-4 py-1 sm:py-1.5 pr-7 sm:pr-10 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest text-emerald-500 focus:outline-none focus:border-emerald-500/50 cursor-pointer truncate max-w-[100px] xs:max-w-[140px] sm:max-w-[200px]"
                     >
                       {models.filter(m => m.status === 'READY').map(model => (
                         <option key={model.id} value={model.id}>{model.name}</option>
@@ -1156,7 +1177,7 @@ function AppContent() {
                 exit={{ opacity: 0, y: -10 }}
                 className="h-full flex flex-col max-w-4xl mx-auto w-full"
               >
-                <div className="flex-1 p-4 lg:p-8 space-y-6">
+                <div className="flex-1 p-3 sm:p-4 lg:p-8 space-y-4 sm:space-y-6">
                   {!activeThreadId ? (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-6 opacity-40">
                       <div className="w-16 h-16 bg-emerald-500/5 border border-emerald-500/20 rounded-lg flex items-center justify-center terminal-glow">
@@ -1223,7 +1244,7 @@ function AppContent() {
                 </div>
 
                 {/* Input Area */}
-                <div className="p-4 lg:p-6 bg-gradient-to-t from-[#050505] via-[#050505] to-transparent sticky bottom-0">
+                <div className="p-3 sm:p-4 lg:p-6 bg-gradient-to-t from-[#050505] via-[#050505] to-transparent sticky bottom-0">
                   <div className="max-w-3xl mx-auto relative">
                     <div className="absolute -top-10 left-0 right-0 flex justify-center pointer-events-none">
                       <AnimatePresence>
@@ -1232,10 +1253,10 @@ function AppContent() {
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: 10 }}
-                            className="bg-emerald-500 text-black px-4 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.4)]"
+                            className="bg-emerald-500 text-black px-3 sm:px-4 py-1 rounded-full text-[9px] sm:text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.4)]"
                           >
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            Loading Model into VRAM...
+                            <Loader2 className="w-2.5 h-2.5 sm:w-3 sm:h-3 animate-spin" />
+                            Loading Model...
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -1246,21 +1267,21 @@ function AppContent() {
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                        placeholder="Enter command or query..."
-                        className="w-full bg-black border border-emerald-500/20 rounded-lg px-4 py-4 pr-14 focus:outline-none focus:border-emerald-500/50 transition-all resize-none font-mono text-sm text-emerald-500 placeholder:text-emerald-500/20 custom-scrollbar"
+                        placeholder="Enter command..."
+                        className="w-full bg-black border border-emerald-500/20 rounded-lg px-3 sm:px-4 py-3 sm:py-4 pr-12 sm:pr-14 focus:outline-none focus:border-emerald-500/50 transition-all resize-none font-mono text-sm text-emerald-500 placeholder:text-emerald-500/20 custom-scrollbar"
                         rows={1}
                       />
                       <button 
                         onClick={handleSendMessage}
                         disabled={!input.trim() || isTyping || !activeThreadId || isLoadingModel}
                         className={cn(
-                          "absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-md transition-all",
+                          "absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 p-1.5 sm:p-2 rounded-md transition-all",
                           input.trim() && !isTyping && activeThreadId && !isLoadingModel
                             ? "bg-emerald-500 text-black shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:scale-105" 
                             : "text-emerald-500/20"
                         )}
                       >
-                        <Send className="w-5 h-5" />
+                        <Send className="w-4 h-4 sm:w-5 sm:h-5" />
                       </button>
                     </div>
                     <div className="mt-3 flex items-center justify-between px-2">
@@ -1289,50 +1310,50 @@ function AppContent() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
-                className="p-6 lg:p-10 max-w-5xl mx-auto w-full space-y-8"
+                className="p-4 sm:p-6 lg:p-10 max-w-5xl mx-auto w-full space-y-6 sm:space-y-8"
               >
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
                   <div>
-                    <h2 className="text-2xl font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow">Model Registry</h2>
-                    <p className="text-emerald-500/40 mt-1 text-xs font-mono uppercase tracking-widest">Manage on-device LLM runtimes and weights.</p>
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow">Model Registry</h2>
+                    <p className="text-emerald-500/40 mt-1 text-[10px] sm:text-xs font-mono uppercase tracking-widest">Manage on-device LLM runtimes.</p>
                   </div>
-                  <div className="bg-black border border-emerald-500/10 rounded-lg px-5 py-3 flex items-center gap-4">
-                    <div className="w-10 h-10 bg-emerald-500/5 rounded flex items-center justify-center border border-emerald-500/20">
-                      <Database className="w-5 h-5 text-emerald-500" />
+                  <div className="bg-black border border-emerald-500/10 rounded-lg px-4 sm:px-5 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
+                    <div className="w-8 h-8 sm:w-10 sm:h-10 bg-emerald-500/5 rounded flex items-center justify-center border border-emerald-500/20">
+                      <Database className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-500" />
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-emerald-500">{storageInfo ? (storageInfo.quotaGB - storageInfo.usageGB).toFixed(2) : '0.00'} GB</div>
-                      <div className="text-[9px] text-emerald-500/40 uppercase tracking-wider font-bold">Available Storage</div>
+                      <div className="text-xs sm:text-sm font-bold text-emerald-500">{storageInfo ? (storageInfo.quotaGB - storageInfo.usageGB).toFixed(2) : '0.00'} GB</div>
+                      <div className="text-[8px] sm:text-[9px] text-emerald-500/40 uppercase tracking-wider font-bold">Available</div>
                     </div>
                   </div>
                 </div>
 
                 {/* Device Readiness Card */}
-                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-6 flex flex-col md:flex-row items-center gap-6">
-                  <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                    <Cpu className={cn("w-8 h-8", readiness.score > 70 ? "text-emerald-500" : "text-yellow-500")} />
+                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4 sm:p-6 flex flex-col md:flex-row items-center gap-4 sm:gap-6">
+                  <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                    <Cpu className={cn("w-6 h-6 sm:w-8 sm:h-8", readiness.score > 70 ? "text-emerald-500" : "text-yellow-500")} />
                   </div>
                   <div className="flex-1 text-center md:text-left">
                     <div className="flex flex-col md:flex-row md:items-center gap-2 mb-1">
-                      <h3 className="text-lg font-bold text-emerald-500 uppercase tracking-wider">Device Readiness: {readiness.status}</h3>
-                      <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-500 rounded text-[10px] font-bold uppercase tracking-widest">Score: {readiness.score}/100</span>
+                      <h3 className="text-base sm:text-lg font-bold text-emerald-500 uppercase tracking-wider">Readiness: {readiness.status}</h3>
+                      <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-500 rounded text-[9px] sm:text-[10px] font-bold uppercase tracking-widest mx-auto md:mx-0 w-fit">Score: {readiness.score}/100</span>
                     </div>
-                    <p className="text-sm text-emerald-500/60 font-mono">
+                    <p className="text-[11px] sm:text-sm text-emerald-500/60 font-mono">
                       {readiness.score > 80 
-                        ? "Optimal hardware detected. High-performance local inference enabled." 
+                        ? "Optimal hardware detected." 
                         : readiness.score > 50 
-                          ? "Standard hardware detected. Balanced performance expected." 
-                          : "Limited hardware detected. Consider smaller models for better stability."}
+                          ? "Standard hardware detected." 
+                          : "Limited hardware detected."}
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-4 w-full md:w-auto">
-                    <div className="bg-black/40 border border-emerald-500/10 rounded-lg p-3 text-center">
-                      <div className="text-xs font-bold text-emerald-500">{readiness.ramGB}GB</div>
-                      <div className="text-[9px] text-emerald-500/40 uppercase font-bold">System RAM</div>
+                  <div className="grid grid-cols-2 gap-3 sm:gap-4 w-full md:w-auto">
+                    <div className="bg-black/40 border border-emerald-500/10 rounded-lg p-2 sm:p-3 text-center">
+                      <div className="text-[10px] sm:text-xs font-bold text-emerald-500">{readiness.ramGB}GB</div>
+                      <div className="text-[8px] sm:text-[9px] text-emerald-500/40 uppercase font-bold">RAM</div>
                     </div>
-                    <div className="bg-black/40 border border-emerald-500/10 rounded-lg p-3 text-center">
-                      <div className="text-xs font-bold text-emerald-500">{gpuFeatures?.hasF16 ? 'FP16' : 'FP32'}</div>
-                      <div className="text-[9px] text-emerald-500/40 uppercase font-bold">GPU Precision</div>
+                    <div className="bg-black/40 border border-emerald-500/10 rounded-lg p-2 sm:p-3 text-center">
+                      <div className="text-[10px] sm:text-xs font-bold text-emerald-500">{gpuFeatures?.hasF16 ? 'FP16' : 'FP32'}</div>
+                      <div className="text-[8px] sm:text-[9px] text-emerald-500/40 uppercase font-bold">GPU</div>
                     </div>
                   </div>
                 </div>
@@ -1509,7 +1530,9 @@ function AppContent() {
                     />
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wider">Downloading model weights...</span>
+                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wider truncate max-w-[70%]">
+                      {model.statusText || 'Downloading model weights...'}
+                    </span>
                     <span className="text-xs font-bold text-blue-500">{model.progress?.toFixed(1)}%</span>
                   </div>
                 </div>
@@ -1526,11 +1549,11 @@ function AppContent() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
-                className="p-6 lg:p-10 max-w-3xl mx-auto w-full space-y-10"
+                className="p-4 sm:p-6 lg:p-10 max-w-3xl mx-auto w-full space-y-8 sm:space-y-10"
               >
                 <div>
-                  <h2 className="text-2xl font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow">System Configuration</h2>
-                  <p className="text-emerald-500/40 mt-1 text-xs font-mono uppercase tracking-widest">Adjust kernel parameters and hardware acceleration.</p>
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-[0.2em] text-emerald-500 uppercase terminal-glow">System Configuration</h2>
+                  <p className="text-emerald-500/40 mt-1 text-[10px] sm:text-xs font-mono uppercase tracking-widest">Adjust kernel parameters and hardware acceleration.</p>
                 </div>
 
                 <div className="space-y-8">
@@ -2023,8 +2046,8 @@ function SidebarItem({ icon, label, active, onClick }: { icon: React.ReactNode, 
 
 function SettingsCard({ title, description, children, icon }: { title: string, description: string, children: React.ReactNode, icon?: React.ReactNode }) {
   return (
-    <div className="bg-[#080808] border border-emerald-500/10 rounded-lg p-6 transition-all hover:border-emerald-500/20 group">
-      <div className="flex items-start justify-between gap-4">
+    <div className="bg-[#080808] border border-emerald-500/10 rounded-lg p-4 sm:p-6 transition-all hover:border-emerald-500/20 group">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             {icon && <span className="text-emerald-500/60 group-hover:text-emerald-500 transition-colors">{icon}</span>}
@@ -2032,7 +2055,9 @@ function SettingsCard({ title, description, children, icon }: { title: string, d
           </div>
           <p className="text-[10px] text-emerald-500/40 leading-relaxed">{description}</p>
         </div>
-        {children}
+        <div className="flex justify-end shrink-0">
+          {children}
+        </div>
       </div>
     </div>
   );
