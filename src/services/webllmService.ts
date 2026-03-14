@@ -35,6 +35,29 @@ export function setEngine(newEngine: webllm.MLCEngineInterface, modelId: string)
   engine = newEngine;
   currentModelId = modelId;
   currentState = 'ready';
+
+  // Attempt to listen for device loss if the engine exposes it
+  // Some versions of WebLLM might not expose this directly, but we can try
+  try {
+    // @ts-ignore - accessing internal device if possible
+    const device = (engine as any).device;
+    if (device && device.lost) {
+      device.lost.then((info: any) => {
+        console.error(`[WebLLM Service] GPU Device lost: ${info.message}`);
+        currentState = 'error';
+        // Notify UI or handle recovery
+        if (onDeviceLostCallback) onDeviceLostCallback(info.message);
+      });
+    }
+  } catch (e) {
+    console.warn("[WebLLM Service] Could not attach device lost listener", e);
+  }
+}
+
+let onDeviceLostCallback: ((message: string) => void) | null = null;
+
+export function onDeviceLost(callback: (message: string) => void) {
+  onDeviceLostCallback = callback;
 }
 
 export function getCurrentModelId(): string | null {
@@ -47,10 +70,26 @@ export function getLastModelId(): string | null {
 
 export async function unloadEngine(): Promise<void> {
   if (engine) {
-    await engine.unload();
-    engine = null;
-    currentModelId = null;
-    currentState = 'idle';
+    try {
+      await engine.unload();
+    } catch (e) {
+      console.warn("[WebLLM Service] Error during engine unload:", e);
+    } finally {
+      engine = null;
+      currentModelId = null;
+      currentState = 'idle';
+    }
+  }
+}
+
+export async function resetEngine(): Promise<void> {
+  console.log("[WebLLM Service] Resetting engine state...");
+  engine = null;
+  currentModelId = null;
+  currentState = 'idle';
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
   }
 }
 
@@ -110,14 +149,13 @@ export async function* streamWebLLMChat(messages: any[], options: { temperature?
       content: m.content
     }));
 
-    // In a real implementation, we would pass the abort signal
     const asyncGenerator = await engine.chat.completions.create({
       messages: chatMessages,
       stream: true,
       temperature: options.temperature ?? 0.7,
       top_p: options.top_p ?? 0.95,
       max_tokens: options.max_tokens ?? 2048,
-      repetition_penalty: options.repetition_penalty ?? 1.1, // Default to 1.1 to prevent looping
+      repetition_penalty: options.repetition_penalty ?? 1.1,
     });
 
     for await (const chunk of asyncGenerator) {
@@ -130,6 +168,11 @@ export async function* streamWebLLMChat(messages: any[], options: { temperature?
       }
     }
   } catch (error: any) {
+    const errorMsg = error?.message || String(error);
+    if (errorMsg.includes("Device was lost") || errorMsg.includes("Instance dropped")) {
+      console.error("[WebLLM Service] Fatal GPU error detected. Resetting engine.");
+      await resetEngine();
+    }
     currentState = 'error';
     console.error("[WebLLM Service] Chat error:", error);
     throw error;

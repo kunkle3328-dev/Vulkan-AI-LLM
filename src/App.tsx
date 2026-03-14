@@ -33,7 +33,7 @@ import { MODEL_MANIFEST } from './models/manifest';
 
 import { boot } from './services/webllmBoot';
 import { checkWebGPUFeatures } from './services/webgpuUtils';
-import { getEngine, streamWebLLMChat, getCurrentModelId, getLastModelId, unloadEngine } from './services/webllmService';
+import { getEngine, streamWebLLMChat, getCurrentModelId, getLastModelId, unloadEngine, onDeviceLost, resetEngine } from './services/webllmService';
 import { streamCloudFallbackChat } from './services/cloudFallbackService';
 import { initLifecycleManager } from './services/modelLifecycleService';
 import { isModelInOPFS, deleteModelFromOPFS } from './services/opfsDownloader';
@@ -77,8 +77,8 @@ const INITIAL_MODELS: Model[] = MODEL_MANIFEST.map(m => ({
   sizeBytes: m.totalBytes,
   tags: m.tags,
   status: 'NOT_INSTALLED',
-  description: `Model from ${m.provider} with ${m.quantization} quantization.`,
-  recommendation: `Recommended for devices with ${m.recommendedRAM}GB+ RAM.`,
+  description: m.description || `Model from ${m.provider} with ${m.quantization} quantization.`,
+  recommendation: m.recommendation || `Recommended for devices with ${m.recommendedRAM}GB+ RAM.`,
   provider: m.provider,
   quantization: m.quantization,
   ramRequirementGB: m.minRAM,
@@ -250,82 +250,71 @@ function AppContent() {
   const [streamingMessage, setStreamingMessage] = useState<{ id: string, content: string } | null>(null);
   const [models, setModels] = useState<Model[]>(() => {
     const saved = localStorage.getItem('vulkan_models');
+    let syncedModels: Model[] = [];
+
     if (saved) {
-      let parsed: Model[] = JSON.parse(saved);
+      const parsed: Model[] = JSON.parse(saved);
       
-      // ID Migration Map
+      // ID Migration Map - Cleaned up q4f16 references
       const idMigration: Record<string, string> = {
         'mistral-7b-v0.3': 'Mistral-7B-Instruct-v0.3-q4f32_1-MLC',
         'gemma-2b-it': 'gemma-2b-it-q4f32_1-MLC',
         'phi-3-mini': 'Phi-3-mini-4k-instruct-q4f32_1-MLC',
-        'llama-3-8b': 'Llama-3-8B-Instruct-q4f32_1-MLC',
-        'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f32_1-MLC',
-        'Llama-3-8B-Instruct-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f32_1-MLC',
-        'Llama-3.1-8B-Instruct-q4f16_1-MLC': 'Llama-3.1-8B-Instruct-q4f32_1-MLC'
+        'llama-3-8b': 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
+        'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
+        'Llama-3-8B-Instruct-q4f16_1-MLC': 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
+        'Llama-3.1-8B-Instruct-q4f16_1-MLC': 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
+        'Llama-3-8B-Instruct-q4f32_1': 'Llama-3.1-8B-Instruct-q4f32_1-MLC'
       };
 
-      // Apply migration
-      parsed = parsed.map(m => ({
-        ...m,
-        id: idMigration[m.id] || m.id
-      }));
-
-      // Sync names and metadata from MODEL_MANIFEST to fix identity bugs
-      const syncedModels = parsed.map(m => {
-        // Match either the exact ID or the f16/f32 variant counterpart
-        const initial = MODEL_MANIFEST.find(im => 
-          im.modelId === m.id || 
-          im.modelId === m.id.replace('q4f32_1', 'q4f16_1') ||
-          im.modelId === m.id.replace('q4f16_1', 'q4f32_1')
-        );
-        // Reset stuck downloads on load
-        const status = m.status === 'DOWNLOADING' ? 'NOT_INSTALLED' : m.status;
-        if (initial) {
+      // Filter and sync with MODEL_MANIFEST
+      syncedModels = parsed
+        .map(m => ({
+          ...m,
+          id: idMigration[m.id] || m.id
+        }))
+        .filter(m => MODEL_MANIFEST.some(im => im.modelId === m.id)) // Only keep models in manifest
+        .map(m => {
+          const initial = MODEL_MANIFEST.find(im => im.modelId === m.id)!;
+          const status = m.status === 'DOWNLOADING' ? 'NOT_INSTALLED' : m.status;
           return { 
             ...m, 
             status,
-            runtime: 'WEBLLM' as const, // Ensure runtime is updated
+            runtime: 'WEBLLM' as const,
             name: initial.canonicalName, 
             tags: initial.tags, 
             size: (initial.totalBytes / (1024 ** 3)).toFixed(1) + ' GB', 
             sizeBytes: initial.totalBytes,
-            description: `Model from ${initial.provider} with ${initial.quantization} quantization.`,
-            recommendation: `Recommended for devices with ${initial.recommendedRAM}GB+ RAM.`,
+            description: initial.description || `Model from ${initial.provider} with ${initial.quantization} quantization.`,
+            recommendation: initial.recommendation || `Recommended for devices with ${initial.recommendedRAM}GB+ RAM.`,
             provider: initial.provider,
             quantization: initial.quantization,
             ramRequirementGB: initial.minRAM,
             storageRequirementGB: Math.ceil(initial.totalBytes / (1024 ** 3))
           };
-        }
-        return { ...m, status, runtime: m.runtime || 'WEBLLM' as const };
-      });
-
-      // Add any new models from MODEL_MANIFEST that aren't in syncedModels
-      const newModels = MODEL_MANIFEST.filter(im => 
-        !syncedModels.some(sm => 
-          sm.id === im.modelId || 
-          sm.id === im.modelId.replace('q4f16_1', 'q4f32_1') ||
-          sm.id === im.modelId.replace('q4f32_1', 'q4f16_1')
-        )
-      ).map(im => ({
-        id: im.modelId,
-        name: im.canonicalName,
-        runtime: 'WEBLLM' as const,
-        size: (im.totalBytes / (1024 ** 3)).toFixed(1) + ' GB',
-        sizeBytes: im.totalBytes,
-        tags: im.tags,
-        status: 'NOT_INSTALLED' as const,
-        description: `Model from ${im.provider} with ${im.quantization} quantization.`,
-        recommendation: `Recommended for devices with ${im.recommendedRAM}GB+ RAM.`,
-        provider: im.provider,
-        quantization: im.quantization,
-        ramRequirementGB: im.minRAM,
-        storageRequirementGB: Math.ceil(im.totalBytes / (1024 ** 3))
-      }));
-
-      return [...syncedModels, ...newModels];
+        });
     }
-    return INITIAL_MODELS;
+
+    // Add any missing models from MODEL_MANIFEST
+    const newModels = MODEL_MANIFEST.filter(im => 
+      !syncedModels.some(sm => sm.id === im.modelId)
+    ).map(im => ({
+      id: im.modelId,
+      name: im.canonicalName,
+      runtime: 'WEBLLM' as const,
+      size: (im.totalBytes / (1024 ** 3)).toFixed(1) + ' GB',
+      sizeBytes: im.totalBytes,
+      tags: im.tags,
+      status: 'NOT_INSTALLED' as const,
+      description: im.description || `Model from ${im.provider} with ${im.quantization} quantization.`,
+      recommendation: im.recommendation || `Recommended for devices with ${im.recommendedRAM}GB+ RAM.`,
+      provider: im.provider,
+      quantization: im.quantization,
+      ramRequirementGB: im.minRAM,
+      storageRequirementGB: Math.ceil(im.totalBytes / (1024 ** 3))
+    }));
+
+    return [...syncedModels, ...newModels];
   });
   
   const [settings, setSettings] = useState<Settings>(() => {
@@ -342,14 +331,15 @@ function AppContent() {
     const saved = localStorage.getItem('vulkan_threads');
     let parsed: ChatThread[] = saved ? JSON.parse(saved) : [];
     
-    // ID Migration Map
+    // ID Migration Map - Cleaned up q4f16 references
     const idMigration: Record<string, string> = {
-      'mistral-7b-v0.3': 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC',
-      'gemma-2b-it': 'gemma-2b-it-q4f16_1-MLC',
-      'phi-3-mini': 'Phi-3-mini-4k-instruct-q4f16_1-MLC',
-      'llama-3-8b': 'Llama-3-8B-Instruct-q4f16_1-MLC',
-      'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3-8B-Instruct-q4f16_1-MLC',
-      'Llama-3-8B-Instruct-q4f32_1': 'Llama-3-8B-Instruct-q4f32_1-MLC'
+      'mistral-7b-v0.3': 'Mistral-7B-Instruct-v0.3-q4f32_1-MLC',
+      'gemma-2b-it': 'gemma-2b-it-q4f32_1-MLC',
+      'phi-3-mini': 'Phi-3-mini-4k-instruct-q4f32_1-MLC',
+      'llama-3-8b': 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
+      'Llama-3-8B-Instruct-v0.1-q4f16_1-MLC': 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
+      'Llama-3-8B-Instruct-q4f16_1-MLC': 'Llama-3.1-8B-Instruct-q4f32_1-MLC',
+      'Llama-3-8B-Instruct-q4f32_1': 'Llama-3.1-8B-Instruct-q4f32_1-MLC'
     };
 
     // Apply migration to threads
@@ -386,6 +376,15 @@ function AppContent() {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    onDeviceLost((message) => {
+      setAppError(`GPU Device Lost: ${message}. This usually happens when the model is too large for your GPU's memory. Try switching to a smaller model.`);
+      // Reset UI state
+      setIsTyping(false);
+      setStreamingMessage(null);
+    });
+  }, []);
+
+  useEffect(() => {
     const initializeApp = async () => {
       // 1. Check GPU Features
       const features = await checkWebGPUFeatures();
@@ -399,7 +398,7 @@ function AppContent() {
         setAppError("WebGPU is not supported or enabled in this browser. Local inference will be unavailable.");
       }
 
-      // 2. Sync with DB and apply Fallback if needed
+      // 2. Sync with DB
       const storageUsage = await getModelStorageUsage();
       const cached = await getCachedModels();
       setCachedModels(cached);
@@ -407,35 +406,8 @@ function AppContent() {
       const stats = await getStorageStats();
       setStorageInfo(stats);
       
-      // We need to work with the current models state
-      // Since setModels is async, we'll use a local variable for the intermediate state
-      let currentModels = [...models];
-
-      // Pass 1: Apply Fallback to IDs
-      currentModels = currentModels.map(m => {
-        let currentId = m.id;
-        let currentSize = m.size;
-        let currentSizeBytes = m.sizeBytes;
-
-        if (features.supported && !features.hasF16 && m.runtime === 'WEBLLM' && currentId.includes('q4f16_1')) {
-          console.log(`[App] Fallback: Switching ${currentId} to q4f32_1`);
-          currentId = currentId.replace('q4f16_1', 'q4f32_1');
-          
-          if (currentId.includes('Llama-3.2-3B')) { currentSize = '2.0 GB'; currentSizeBytes = 2147483648; }
-          else if (currentId.includes('Llama-3-8B')) { currentSize = '5.2 GB'; currentSizeBytes = 5583457484; }
-          else if (currentId.includes('Mistral-7B')) { currentSize = '4.5 GB'; currentSizeBytes = 4831838208; }
-          else if (currentId.includes('Phi-3-mini')) { currentSize = '2.4 GB'; currentSizeBytes = 2576980377; }
-          else if (currentId.includes('gemma-2b')) { currentSize = '1.6 GB'; currentSizeBytes = 1717986918; }
-          else {
-             currentSizeBytes = Math.round(m.sizeBytes * 1.15);
-             currentSize = (currentSizeBytes / (1024 ** 3)).toFixed(1) + " GB";
-          }
-        }
-        return { ...m, id: currentId, size: currentSize, sizeBytes: currentSizeBytes };
-      });
-
-      // Pass 2: Check download status for the (potentially updated) IDs
-      const finalModels = await Promise.all(currentModels.map(async (m) => {
+      // Pass 2: Check download status
+      const finalModels = await Promise.all(models.map(async (m) => {
         let isDownloaded = false;
         let isCached = false;
         if (m.runtime === 'WEBLLM') {
@@ -443,7 +415,6 @@ function AppContent() {
           isCached = await isModelInCache(m.id);
           isDownloaded = inOPFS || isCached;
         } else {
-          // Fallback for other runtimes if any
           isDownloaded = await isModelInOPFS(m.id);
         }
         const actualSizeBytes = storageUsage.find(s => s.id === m.id)?.size || 0;
@@ -453,16 +424,6 @@ function AppContent() {
       
       console.log("[App] Initial models synced:", finalModels);
       setModels(finalModels);
-
-      // Update threads to match fallback IDs
-      if (features.supported && !features.hasF16) {
-        setThreads(prev => prev.map(t => {
-          if (t.modelId.includes('q4f16_1')) {
-            return { ...t, modelId: t.modelId.replace('q4f16_1', 'q4f32_1') };
-          }
-          return t;
-        }));
-      }
     };
 
     initializeApp();
@@ -649,8 +610,30 @@ function AppContent() {
         }
         return t;
       }));
-    } catch (error) {
-      console.error("Streaming error:", error);
+    } catch (error: any) {
+      console.error("[Client] Chat error:", error);
+      const errorMsg = error?.message || String(error);
+      
+      let displayError = errorMsg;
+      if (errorMsg.includes("Device was lost") || errorMsg.includes("Instance dropped")) {
+        displayError = "FATAL GPU ERROR: The GPU device was lost or ran out of memory. This usually happens when the model is too large for your device. We've reset the engine. Please try a smaller model (e.g., Llama-3.2-1B).";
+        await resetEngine();
+      }
+
+      setThreads(prev => prev.map(t => {
+        if (t.id === activeThreadId) {
+          return {
+            ...t,
+            messages: [...t.messages, {
+              id: assistantMessageId,
+              role: 'assistant',
+              content: `Error: ${displayError}`,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }]
+          };
+        }
+        return t;
+      }));
     } finally {
       setIsTyping(false);
       setStreamingMessage(null);
@@ -707,14 +690,6 @@ function AppContent() {
     });
 
   const startRealDownload = async (id: string) => {
-    // Safety check for shader-f16
-    if (gpuFeatures && !gpuFeatures.hasF16 && id.includes('q4f16')) {
-      const fallbackId = id.replace('q4f16_1', 'q4f32_1');
-      console.warn(`[App] Intercepted incompatible download. Switching ${id} to ${fallbackId}`);
-      // If we have a fallback, use it, otherwise show error
-      id = fallbackId;
-    }
-
     const model = models.find(m => m.id === id);
     if (!model) return;
 
@@ -747,7 +722,7 @@ function AppContent() {
             setModels(prev => prev.map(m => m.id === id ? { 
               ...m, 
               progress: progress !== undefined ? progress * 100 : undefined,
-              downloadSpeed: isCacheLoad ? 'Initializing Kernel' : (message && message.includes('MB/s') ? message.split(' ').slice(-2).join(' ') : undefined),
+              downloadSpeed: isCacheLoad ? 'Initializing' : (message && message.includes('MB/s') ? message.split(' ').slice(-2).join(' ') : undefined),
               eta: isCacheLoad ? 'Fast' : (message && message.includes('ETA') ? message.split('ETA: ')[1] : undefined),
               statusText: message || phase
             } : m));
@@ -1370,11 +1345,11 @@ function AppContent() {
                       className="w-full bg-black border border-emerald-500/20 rounded-lg pl-10 pr-4 py-2 text-sm text-emerald-500 focus:outline-none focus:border-emerald-500/50"
                     />
                   </div>
-                  <div className="flex gap-2">
+                  <div className="grid grid-cols-2 sm:flex gap-2">
                     <select 
                       value={modelFilter}
                       onChange={(e) => setModelFilter(e.target.value as any)}
-                      className="bg-black border border-emerald-500/20 rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-500 focus:outline-none"
+                      className="bg-black border border-emerald-500/20 rounded-lg px-3 py-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-emerald-500 focus:outline-none w-full"
                     >
                       <option value="all">All Models</option>
                       <option value="installed">Installed</option>
@@ -1383,7 +1358,7 @@ function AppContent() {
                     <select 
                       value={modelSort}
                       onChange={(e) => setModelSort(e.target.value as any)}
-                      className="bg-black border border-emerald-500/20 rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-500 focus:outline-none"
+                      className="bg-black border border-emerald-500/20 rounded-lg px-3 py-2 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-emerald-500 focus:outline-none w-full"
                     >
                       <option value="name">Sort by Name</option>
                       <option value="size">Sort by Size</option>
@@ -1396,7 +1371,7 @@ function AppContent() {
                   {filteredModels.map((model) => (
             <div 
               key={model.id}
-              className="bg-[#080808] border border-emerald-500/10 rounded-lg p-5 flex flex-col gap-6 group hover:border-emerald-500/30 transition-all"
+              className="bg-[#080808] border border-emerald-500/10 rounded-lg p-5 flex flex-col gap-6 group hover:border-emerald-500/30 transition-all min-w-0 overflow-hidden"
             >
               <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
                 <button 
@@ -1436,7 +1411,7 @@ function AppContent() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mb-2">
                     <span className="px-2 py-0.5 bg-emerald-500/5 border border-emerald-500/10 rounded text-[9px] font-bold text-emerald-500/60 uppercase tracking-widest">{model.provider || 'Local'}</span>
-                    <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-[9px] font-bold text-white/40 uppercase tracking-widest">{model.format || 'MLC'} • {model.quantization || 'q4f16_1'}</span>
+                    <span className="px-2 py-0.5 bg-white/5 border border-white/10 rounded text-[9px] font-bold text-white/40 uppercase tracking-widest">{model.format || 'MLC'} • {model.quantization || 'q4f32_1'}</span>
                     <span className="text-[10px] text-emerald-500/40 font-mono uppercase">
                       {model.status === 'READY' && model.actualSizeBytes 
                         ? `${(model.actualSizeBytes / (1024 ** 3)).toFixed(2)} GB on disk` 
@@ -1529,11 +1504,11 @@ function AppContent() {
                       animate={{ width: `${model.progress}%` }}
                     />
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wider truncate max-w-[70%]">
+                  <div className="flex justify-between items-center gap-4">
+                    <span className="flex-1 min-w-0 text-[10px] text-white/40 font-bold uppercase tracking-wider truncate">
                       {model.statusText || 'Downloading model weights...'}
                     </span>
-                    <span className="text-xs font-bold text-blue-500">{model.progress?.toFixed(1)}%</span>
+                    <span className="shrink-0 text-xs font-bold text-blue-500">{model.progress?.toFixed(1)}%</span>
                   </div>
                 </div>
               )}

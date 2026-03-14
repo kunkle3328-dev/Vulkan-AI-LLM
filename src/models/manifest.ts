@@ -1,6 +1,7 @@
 import { ModelManifest } from "../types";
 
 export const MODEL_MANIFEST: ModelManifest[] = [
+  // --- SMALL MODELS (3) ---
   {
     modelId: "Llama-3.2-1B-Instruct-q4f32_1-MLC",
     canonicalName: "Llama 3.2 1B Instruct",
@@ -13,21 +14,9 @@ export const MODEL_MANIFEST: ModelManifest[] = [
     minRAM: 2,
     recommendedRAM: 4,
     visionSupport: false,
-    tags: ["instruct", "llama3.2", "small", "recommended"]
-  },
-  {
-    modelId: "Llama-3.2-3B-Instruct-q4f32_1-MLC",
-    canonicalName: "Llama 3.2 3B Instruct",
-    alias: "llama3.2-3b",
-    provider: "meta",
-    quantization: "q4f32_1",
-    artifactUrls: ["https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
-    expectedSha256: null,
-    totalBytes: 2800000000,
-    minRAM: 4,
-    recommendedRAM: 8,
-    visionSupport: false,
-    tags: ["instruct", "llama3.2", "medium"]
+    tags: ["instruct", "llama3.2", "small", "recommended"],
+    description: "Meta's lightweight 1B parameter model optimized for edge devices. Excellent for basic chat, summarization, and simple instruction following with minimal memory footprint.",
+    recommendation: "Ideal for older smartphones, entry-level tablets, or devices with 2-4GB RAM. Extremely fast inference."
   },
   {
     modelId: "Qwen2.5-1.5B-Instruct-q4f32_1-MLC",
@@ -41,21 +30,9 @@ export const MODEL_MANIFEST: ModelManifest[] = [
     minRAM: 2,
     recommendedRAM: 4,
     visionSupport: false,
-    tags: ["instruct", "qwen2.5", "small"]
-  },
-  {
-    modelId: "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
-    canonicalName: "Qwen 2.5 0.5B Instruct",
-    alias: "qwen2.5-0.5b",
-    provider: "alibaba",
-    quantization: "q4f32_1",
-    artifactUrls: ["https://huggingface.co/mlc-ai/Qwen2.5-0.5B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
-    expectedSha256: null,
-    totalBytes: 600000000,
-    minRAM: 1,
-    recommendedRAM: 2,
-    visionSupport: false,
-    tags: ["instruct", "qwen2.5", "tiny"]
+    tags: ["instruct", "qwen2.5", "small"],
+    description: "Alibaba's highly capable 1.5B parameter model. Punches above its weight class in reasoning and multilingual tasks while remaining highly efficient.",
+    recommendation: "Great balance of performance and efficiency for modern smartphones and standard laptops with 4GB+ RAM."
   },
   {
     modelId: "SmolLM2-360M-Instruct-q4f32_1-MLC",
@@ -69,62 +46,206 @@ export const MODEL_MANIFEST: ModelManifest[] = [
     minRAM: 1,
     recommendedRAM: 2,
     visionSupport: false,
-    tags: ["instruct", "smollm2", "tiny"]
+    tags: ["instruct", "smollm2", "tiny"],
+    description: "An ultra-compact 360M parameter model designed for extreme efficiency. Good for basic text completion and very simple queries.",
+    recommendation: "Best for highly constrained environments, older devices, or when battery life is the absolute priority. Runs on almost anything."
   },
+
+  // --- MEDIUM MODELS (5) ---
   {
-    modelId: "Llama-3.1-8B-Instruct-q4f32_1-MLC",
-    canonicalName: "Llama 3.1 8B Instruct (FP32)",
-    alias: "llama3.1-8b-fp32",
+    modelId: "Llama-3.2-3B-Instruct-q4f32_1-MLC",
+    canonicalName: "Llama 3.2 3B Instruct",
+    alias: "llama3.2-3b",
     provider: "meta",
     quantization: "q4f32_1",
-    artifactUrls: ["https://huggingface.co/mlc-ai/Llama-3.1-8B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    artifactUrls: ["https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
     expectedSha256: null,
-    totalBytes: 5400000000,
-    minRAM: 12,
-    recommendedRAM: 16,
+    totalBytes: 2800000000,
+    minRAM: 4,
+    recommendedRAM: 8,
     visionSupport: false,
-    tags: ["instruct", "llama3.1", "large"]
+    tags: ["instruct", "llama3.2", "medium"],
+    description: "Meta's powerful 3B parameter model. Offers a significant step up in reasoning, context understanding, and nuance compared to 1B models.",
+    recommendation: "Excellent daily driver for modern laptops, high-end tablets, and flagship smartphones with 8GB+ RAM."
   },
   {
     modelId: "Mistral-7B-Instruct-v0.3-q4f32_1-MLC",
-    canonicalName: "Mistral 7B v0.3 (FP32)",
-    alias: "mistral-7b-fp32",
+    canonicalName: "Mistral 7B v0.3",
+    alias: "mistral-7b",
     provider: "mistral",
     quantization: "q4f32_1",
     artifactUrls: ["https://huggingface.co/mlc-ai/Mistral-7B-Instruct-v0.3-q4f32_1-MLC/resolve/main/model.tar.gz"],
     expectedSha256: null,
     totalBytes: 4800000000,
-    minRAM: 12,
+    minRAM: 8,
     recommendedRAM: 16,
     visionSupport: false,
-    tags: ["instruct", "mistral"]
+    tags: ["instruct", "mistral", "medium"],
+    description: "A highly regarded 7B parameter model known for strong reasoning, coding capabilities, and instruction following. A staple in open-source AI.",
+    recommendation: "Requires a capable machine. Best on laptops or desktops with 16GB+ RAM and dedicated graphics or Apple Silicon."
   },
   {
     modelId: "Phi-3-mini-4k-instruct-q4f32_1-MLC",
-    canonicalName: "Phi-3 Mini 4K (FP32)",
-    alias: "phi3-mini-fp32",
+    canonicalName: "Phi-3 Mini 4K",
+    alias: "phi3-mini",
     provider: "microsoft",
     quantization: "q4f32_1",
     artifactUrls: ["https://huggingface.co/mlc-ai/Phi-3-mini-4k-instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
     expectedSha256: null,
     totalBytes: 2600000000,
-    minRAM: 6,
+    minRAM: 4,
     recommendedRAM: 8,
     visionSupport: false,
-    tags: ["instruct", "phi3"]
+    tags: ["instruct", "phi3", "medium"],
+    description: "Microsoft's highly optimized 3.8B parameter model. Exceptionally strong at logic, coding, and math tasks relative to its size.",
+    recommendation: "Great for developers and power users on modern laptops with 8GB+ RAM. Very efficient for its capability level."
   },
   {
-    modelId: "gemma-2b-it-q4f32_1-MLC",
-    canonicalName: "Gemma 2B IT (FP32)",
-    alias: "gemma-2b-fp32",
-    provider: "google",
+    modelId: "Qwen2.5-7B-Instruct-q4f32_1-MLC",
+    canonicalName: "Qwen 2.5 7B Instruct",
+    alias: "qwen2.5-7b",
+    provider: "alibaba",
     quantization: "q4f32_1",
-    artifactUrls: ["https://huggingface.co/mlc-ai/gemma-2b-it-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    artifactUrls: ["https://huggingface.co/mlc-ai/Qwen2.5-7B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    expectedSha256: null,
+    totalBytes: 5200000000,
+    minRAM: 8,
+    recommendedRAM: 12,
+    visionSupport: false,
+    tags: ["instruct", "qwen2.5", "medium"],
+    description: "Alibaba's flagship 7B model. Offers top-tier performance across a wide range of benchmarks, including coding, math, and general knowledge.",
+    recommendation: "For high-performance needs. Requires a modern desktop or high-end laptop (M-series Mac or dedicated GPU) with 12GB+ RAM."
+  },
+  {
+    modelId: "StableLM-Zephyr-3B-q4f32_1-MLC",
+    canonicalName: "StableLM Zephyr 3B",
+    alias: "stablelm-zephyr-3b",
+    provider: "stability",
+    quantization: "q4f32_1",
+    artifactUrls: ["https://huggingface.co/mlc-ai/stablelm-zephyr-3b-q4f32_1-MLC/resolve/main/model.tar.gz"],
     expectedSha256: null,
     totalBytes: 1800000000,
     minRAM: 4,
     recommendedRAM: 6,
     visionSupport: false,
-    tags: ["instruct", "gemma"]
+    tags: ["instruct", "stablelm", "medium"],
+    description: "A fast and capable 3B parameter model fine-tuned for chat and instruction following. Good alternative to Llama 3.2 3B.",
+    recommendation: "Runs well on most modern laptops and high-end mobile devices with 6GB+ RAM."
+  },
+
+  // --- CODING MODELS (5 SMALL TO MEDIUM) ---
+  {
+    modelId: "Qwen2.5-Coder-0.5B-Instruct-q4f32_1-MLC",
+    canonicalName: "Qwen 2.5 Coder 0.5B",
+    alias: "qwen2.5-coder-0.5b",
+    provider: "alibaba",
+    quantization: "q4f32_1",
+    artifactUrls: ["https://huggingface.co/mlc-ai/Qwen2.5-Coder-0.5B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    expectedSha256: null,
+    totalBytes: 600000000,
+    minRAM: 1,
+    recommendedRAM: 2,
+    visionSupport: false,
+    tags: ["coding", "qwen2.5", "small"],
+    description: "An incredibly small coding assistant. Good for basic syntax completion, simple script generation, and quick code explanations.",
+    recommendation: "Perfect for lightweight coding on-the-go using smartphones or older laptops with minimal RAM."
+  },
+  {
+    modelId: "Qwen2.5-Coder-1.5B-Instruct-q4f32_1-MLC",
+    canonicalName: "Qwen 2.5 Coder 1.5B",
+    alias: "qwen2.5-coder-1.5b",
+    provider: "alibaba",
+    quantization: "q4f32_1",
+    artifactUrls: ["https://huggingface.co/mlc-ai/Qwen2.5-Coder-1.5B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    expectedSha256: null,
+    totalBytes: 1500000000,
+    minRAM: 2,
+    recommendedRAM: 4,
+    visionSupport: false,
+    tags: ["coding", "qwen2.5", "small"],
+    description: "A highly capable compact coding model. Handles standard programming tasks, debugging, and code refactoring surprisingly well.",
+    recommendation: "Excellent balance for developers wanting a fast, local coding assistant on standard laptops with 4GB+ RAM."
+  },
+  {
+    modelId: "Qwen2.5-Coder-3B-Instruct-q4f32_1-MLC",
+    canonicalName: "Qwen 2.5 Coder 3B",
+    alias: "qwen2.5-coder-3b",
+    provider: "alibaba",
+    quantization: "q4f32_1",
+    artifactUrls: ["https://huggingface.co/mlc-ai/Qwen2.5-Coder-3B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    expectedSha256: null,
+    totalBytes: 2800000000,
+    minRAM: 4,
+    recommendedRAM: 8,
+    visionSupport: false,
+    tags: ["coding", "qwen2.5", "medium"],
+    description: "A robust mid-size coding model. Capable of understanding complex logic, generating larger code blocks, and assisting with architecture.",
+    recommendation: "The sweet spot for most developers. Runs smoothly on modern laptops (like M1/M2 Macs) with 8GB+ RAM."
+  },
+  {
+    modelId: "Qwen2.5-Coder-7B-Instruct-q4f32_1-MLC",
+    canonicalName: "Qwen 2.5 Coder 7B",
+    alias: "qwen2.5-coder-7b",
+    provider: "alibaba",
+    quantization: "q4f32_1",
+    artifactUrls: ["https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    expectedSha256: null,
+    totalBytes: 5200000000,
+    minRAM: 8,
+    recommendedRAM: 12,
+    visionSupport: false,
+    tags: ["coding", "qwen2.5", "medium"],
+    description: "A powerful 7B coding model that rivals much larger proprietary models. Excellent for complex problem solving and advanced programming.",
+    recommendation: "Requires a strong machine. Best suited for desktops or high-end laptops with 12GB+ RAM and good GPU acceleration."
+  },
+  {
+    modelId: "CodeLlama-7b-Instruct-hf-q4f32_1-MLC",
+    canonicalName: "CodeLlama 7B Instruct",
+    alias: "codellama-7b",
+    provider: "meta",
+    quantization: "q4f32_1",
+    artifactUrls: ["https://huggingface.co/mlc-ai/CodeLlama-7b-Instruct-hf-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    expectedSha256: null,
+    totalBytes: 5000000000,
+    minRAM: 8,
+    recommendedRAM: 12,
+    visionSupport: false,
+    tags: ["coding", "codellama", "medium"],
+    description: "Meta's dedicated coding model based on Llama 2. Strong at code generation, infilling, and understanding various programming languages.",
+    recommendation: "A solid alternative to Qwen for coding tasks. Requires a capable machine with 12GB+ RAM."
+  },
+
+  // --- 8GB+ MODELS (2) ---
+  {
+    modelId: "DeepSeek-Coder-V2-Lite-Instruct-q4f32_1-MLC",
+    canonicalName: "DeepSeek Coder V2 Lite",
+    alias: "deepseek-coder-v2-lite",
+    provider: "deepseek",
+    quantization: "q4f32_1",
+    artifactUrls: ["https://huggingface.co/mlc-ai/DeepSeek-Coder-V2-Lite-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    expectedSha256: null,
+    totalBytes: 9000000000,
+    minRAM: 12,
+    recommendedRAM: 16,
+    visionSupport: false,
+    tags: ["coding", "deepseek", "large"],
+    description: "An exceptionally powerful Mixture-of-Experts (MoE) coding model. Offers state-of-the-art performance for complex software development tasks.",
+    recommendation: "Heavyweight model. Strictly for high-end workstations or Apple Silicon Macs (M-series Max/Pro) with 16GB+ unified memory."
+  },
+  {
+    modelId: "Qwen2.5-Coder-32B-Instruct-q4f32_1-MLC",
+    canonicalName: "Qwen 2.5 Coder 32B",
+    alias: "qwen2.5-coder-32b",
+    provider: "alibaba",
+    quantization: "q4f32_1",
+    artifactUrls: ["https://huggingface.co/mlc-ai/Qwen2.5-Coder-32B-Instruct-q4f32_1-MLC/resolve/main/model.tar.gz"],
+    expectedSha256: null,
+    totalBytes: 18000000000,
+    minRAM: 24,
+    recommendedRAM: 32,
+    visionSupport: false,
+    tags: ["coding", "qwen2.5", "large"],
+    description: "A massive 32B parameter coding behemoth. Provides near-GPT-4 level coding capabilities locally, handling entire project architectures.",
+    recommendation: "Extreme hardware required. Only attempt on top-tier workstations (e.g., Mac Studio, RTX 4090 setups) with 32GB+ RAM."
   }
 ];

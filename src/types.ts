@@ -23,12 +23,14 @@ export interface ModelManifest {
   provider: string;
   quantization: string;
   artifactUrls: string[];
-  expectedSha256: string[];
+  expectedSha256: string[] | null;
   totalBytes: number;
   minRAM: number;
   recommendedRAM: number;
   visionSupport: boolean;
   tags: string[];
+  description?: string;
+  recommendation?: string;
 }
 
 export interface DeviceReadinessReport {

@@ -61,9 +61,6 @@ export async function boot({ modelId, onProgress }: BootOptions): Promise<webllm
       if (!readiness.webgpuAvailable) {
         throw new Error("no_webgpu");
       }
-      if (modelId.includes("q4f16") && !readiness.shaderF16Supported) {
-        throw new Error("no_shader_f16");
-      }
       if (readiness.quotaEstimate < 2) {
         throw new Error("low_storage");
       }
@@ -88,6 +85,10 @@ export async function boot({ modelId, onProgress }: BootOptions): Promise<webllm
       return engine;
     } catch (engineErr: any) {
       console.error("[Boot] Initialization failed:", engineErr);
+      const errorMsg = engineErr?.message || String(engineErr);
+      if (errorMsg.includes("Device was lost") || errorMsg.includes("Instance dropped")) {
+        throw new Error("FATAL_GPU_ERROR: The GPU device was lost during initialization. This usually means the model is too large for your GPU memory. Please try a smaller model.");
+      }
       throw engineErr;
     } finally {
       activeBoots.delete(modelId);
